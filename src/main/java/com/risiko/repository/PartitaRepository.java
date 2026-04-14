@@ -23,12 +23,16 @@ public interface PartitaRepository extends JpaRepository<Partita, Long> {
     """)
     List<Object[]> getClassifica();
 
-    /** Statistiche aggregate per un singolo utente */
     @Query("""
-        SELECT COUNT(p),
-               SUM(CASE WHEN p.corretta = true THEN 1 ELSE 0 END),
-               SUM(p.punteggio)
-        FROM Partita p WHERE p.utente.id = :utenteId
-    """)
-    Object[] getStatsByUtenteId(Long utenteId);
+    SELECT COUNT(p),
+           SUM(CASE WHEN p.corretta = true THEN 1 ELSE 0 END),
+           SUM(p.punteggio)
+    FROM Partita p WHERE p.utente.id = :utenteId
+""")
+    List<Object[]> getStatsByUtenteId(Long utenteId);
+
+
+    List<Partita> findTop20ByUtenteUsernameOrderByGiocataIlDesc(String username);
+    List<Partita> findByUtenteUsername(String username);
+
 }

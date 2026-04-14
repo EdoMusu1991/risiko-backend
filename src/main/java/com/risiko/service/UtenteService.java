@@ -54,4 +54,23 @@ public class UtenteService implements UserDetailsService {
         return repo.findByUsername(username)
                 .orElseThrow(() -> new RuntimeException("Utente non trovato: " + username));
     }
+
+    public void cambiaAvatar(String username, String nuovoAvatar) {
+        Utente u = repo.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("Utente non trovato"));
+        u.setAvatar(nuovoAvatar);
+        repo.save(u);
+    }
+
+    /**
+     * Cambia la password verificando prima quella vecchia.
+     */
+    public void cambiaPassword(String username, String vecchia, String nuova) {
+        Utente u = repo.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("Utente non trovato"));
+        if (!encoder.matches(vecchia, u.getPassword()))
+            throw new RuntimeException("Password attuale non corretta");
+        u.setPassword(encoder.encode(nuova));
+        repo.save(u);
+    }
 }

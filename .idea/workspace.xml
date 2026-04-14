@@ -4,7 +4,21 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="be46a949-4d1c-47b8-820a-6eb1e2f853c1" name="Changes" comment="" />
+    <list default="true" id="be46a949-4d1c-47b8-820a-6eb1e2f853c1" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/risiko/controller/ProfiloController.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/risiko/controller/ProfiloController.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/risiko/repository/PartitaRepository.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/risiko/repository/PartitaRepository.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/risiko/service/PartitaService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/PartitaService.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/risiko/service/UtenteService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/UtenteService.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/target/classes/com/risiko/service/UtenteService.class" beforeDir="false" afterPath="$PROJECT_DIR$/target/classes/com/risiko/service/UtenteService.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/target/classes/static/195.f05e6177b5d7c9e9.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/target/classes/static/383.e816f446ab38c040.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/target/classes/static/705.003fcf612efff718.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/target/classes/static/761.6d9af9945754651b.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/target/classes/static/main.25bcb037e5b579d1.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/target/classes/static/runtime.1bbd716a3d86f370.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/target/classes/static/styles.175fe679044a19f0.css" beforeDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
