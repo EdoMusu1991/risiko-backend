@@ -37,10 +37,14 @@ public class UtenteService implements UserDetailsService {
         if (email != null && !email.isBlank() && repo.existsByEmail(email)) {
             throw new RuntimeException("Email già in uso");
         }
+
+        // Converti stringa vuota in null
+        String emailDaSalvare = (email == null || email.isBlank()) ? null : email;
+
         return repo.save(new Utente(
                 username,
                 encoder.encode(password),
-                email,
+                emailDaSalvare,
                 avatar
         ));
     }
