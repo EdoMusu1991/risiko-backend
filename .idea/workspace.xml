@@ -5,9 +5,40 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="be46a949-4d1c-47b8-820a-6eb1e2f853c1" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/controller/SimulazioneController.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/ClassificaSimulazioneDto.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/DettaglioRisposta.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/HintDto.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/IndovinaObiettiviRequest.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/NuovaSimulazioneDto.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/NuovaSimulazioneRequest.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/RisultatoSimulazioneDto.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/SimulazioneRiepilogoDto.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/SnapshotTurnoDto.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/StatSimulazioneDto.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/TerritoryStateDto.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/model/GiocatoreSimulato.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/model/HintUsato.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/model/SimulazionePartita.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/model/SimulazioneRisultato.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/repository/GiocatoreSimulatoRepository.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/repository/HintUsatoRepository.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/repository/SimulazionePartitaRepository.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/repository/SimulazioneRisultatoRepository.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/AIPlayerService.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/ObiettivoInferencer.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/RisikoBoardData.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/SimulazioneCleanupJob.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/SimulazioneService.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/TerritoryState.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/risiko/dto/RisultatoGiocatoreDto.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/RisultatoGiocatoreDto.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/risiko/service/QuizService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/QuizService.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/resources/static/341.fe764bb39b4ea136.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/resources/static/687.df1e529c21c50048.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/resources/static/705.a4570ece54ab3fe1.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/resources/static/common.c7a905b056a529de.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/resources/static/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/resources/static/index.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/resources/static/main.a26340536c9d44ea.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/resources/static/runtime.6c3066d00024c68f.js" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -17,6 +48,7 @@
   <component name="FileTemplateManagerImpl">
     <option name="RECENT_TEMPLATES">
       <list>
+        <option value="Interface" />
         <option value="Class" />
       </list>
     </option>
@@ -38,30 +70,32 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;Application.RisikoApplication.executor&quot;: &quot;Run&quot;,
-    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
-    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;C:/Users/edoardo.musumeci/Desktop/Documenti personali/INDOVINA_OBBIETTIVI/risiko-fullstack/risiko-backend/src/main/java/com/risiko/dto&quot;,
-    &quot;project.structure.last.edited&quot;: &quot;Project&quot;,
-    &quot;project.structure.proportion&quot;: &quot;0.0&quot;,
-    &quot;project.structure.side.proportion&quot;: &quot;0.0&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "Application.RisikoApplication.executor": "Run",
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "feature/simulazione",
+    "kotlin-language-version-configured": "true",
+    "last_opened_file_path": "C:/Users/edoardo.musumeci/Desktop/Documenti personali/INDOVINA_OBBIETTIVI/risiko-fullstack/risiko-backend/src/main/java/com/risiko/dto",
+    "project.structure.last.edited": "Project",
+    "project.structure.proportion": "0.0",
+    "project.structure.side.proportion": "0.0",
+    "settings.editor.selected.configurable": "preferences.pluginManager"
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="C:\Users\edoardo.musumeci\Desktop\Documenti personali\INDOVINA_OBBIETTIVI\risiko-fullstack\risiko-backend\src\main\java\com\risiko\dto" />
     </key>
     <key name="MoveFile.RECENT_KEYS">
-      <recent name="C:\Users\edoardo.musumeci\Desktop\Documenti personali\INDOVINA_OBBIETTIVI\risiko-fullstack\risiko-backend\src\main\resources\static" />
-      <recent name="C:\Users\edoardo.musumeci\Desktop\Documenti personali\INDOVINA_OBBIETTIVI\risiko-fullstack\risiko-backend\src\main\resources" />
-      <recent name="C:\Users\edoardo.musumeci\Desktop\Documenti personali\INDOVINA_OBBIETTIVI\risiko-fullstack\risiko-backend" />
+      <recent name="C:\Users\edoardo.musumeci\Desktop\Documenti_personali\INDOVINA_OBBIETTIVI\risiko-fullstack\risiko-backend\src\main\java\com\risiko\service" />
+      <recent name="C:\Users\edoardo.musumeci\Desktop\Documenti_personali\INDOVINA_OBBIETTIVI\risiko-fullstack\risiko-backend\src\main\java\com\risiko\repository" />
+      <recent name="C:\Users\edoardo.musumeci\Desktop\Documenti_personali\INDOVINA_OBBIETTIVI\risiko-fullstack\risiko-backend\src\main\java\com\risiko\dto" />
+      <recent name="C:\Users\edoardo.musumeci\Desktop\Documenti_personali\INDOVINA_OBBIETTIVI\risiko-fullstack\risiko-backend\src\main\java\com\risiko\controller" />
+      <recent name="C:\Users\edoardo.musumeci\Desktop\Documenti_personali\INDOVINA_OBBIETTIVI\risiko-fullstack\risiko-backend\src\main\java\com\risiko\model" />
     </key>
   </component>
   <component name="RunManager">
