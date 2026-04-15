@@ -2,10 +2,13 @@ package com.risiko.service;
 
 import com.risiko.dto.ClassificaDto;
 import com.risiko.dto.PartitaRequest;
+import com.risiko.dto.PartitaRistoDto;
 import com.risiko.dto.ProfiloDto;
 import com.risiko.model.Partita;
 import com.risiko.model.Utente;
 import com.risiko.repository.PartitaRepository;
+import com.risiko.repository.UtenteRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -16,6 +19,8 @@ public class PartitaService {
 
     private final PartitaRepository partitaRepo;
     private final UtenteService utenteService;
+    @Autowired
+    private UtenteRepository utenteRepo;
 
     public PartitaService(PartitaRepository partitaRepo, UtenteService utenteService) {
         this.partitaRepo = partitaRepo;
@@ -35,24 +40,54 @@ public class PartitaService {
         partitaRepo.save(p);
     }
 
-    /** Profilo utente con statistiche aggregate */
     public ProfiloDto getProfilo(String username) {
-        Utente u = utenteService.findByUsername(username);
-        List<Object[]> rawStats = partitaRepo.getStatsByUtenteId(u.getId());
-        Object[] stats = (rawStats != null && !rawStats.isEmpty()) ? rawStats.get(0) : new Object[]{0L, 0L, 0L};
+        Utente utente = utenteRepo.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("Utente non trovato"));
 
-        long tot  = stats[0] != null ? ((Number) stats[0]).longValue() : 0L;
-        long cor  = stats[1] != null ? ((Number) stats[1]).longValue() : 0L;
-        long pts  = stats[2] != null ? ((Number) stats[2]).longValue() : 0L;
-        long pct = tot > 0 ? Math.round((cor * 100.0) / tot) : 0L;
-        
+        List<Partita> partite = partitaRepo.findByUtenteOrderByGiocataIlAsc(utente);
+
+        int totale    = partite.size();
+        int corrette  = (int) partite.stream().filter(Partita::isCorretta).count();
+        int sbagliate = totale - corrette;
+        int punteggio = partite.stream().mapToInt(Partita::getPunteggio).sum();
+
+        // Per difficoltà
+        int totaleFacile    = (int) partite.stream().filter(p -> p.getDifficolta() == 1).count();
+        int totaleMedio     = (int) partite.stream().filter(p -> p.getDifficolta() == 2).count();
+        int totaleDifficile = (int) partite.stream().filter(p -> p.getDifficolta() == 3).count();
+
+        int corretteFacile    = (int) partite.stream().filter(p -> p.getDifficolta() == 1 && p.isCorretta()).count();
+        int corretteMedio     = (int) partite.stream().filter(p -> p.getDifficolta() == 2 && p.isCorretta()).count();
+        int corretteDifficile = (int) partite.stream().filter(p -> p.getDifficolta() == 3 && p.isCorretta()).count();
+
+        // Streak corrente
+        int streak = 0;
+        List<Partita> invertita = new ArrayList<>(partite);
+        Collections.reverse(invertita);
+        for (Partita p : invertita) {
+            if (p.isCorretta()) streak++;
+            else break;
+        }
+
+        // Ultime 20 partite (ordine inverso)
+        List<PartitaRistoDto> ultime = invertita.stream()
+                .limit(20)
+                .map(p -> new PartitaRistoDto(
+                        p.getId(),
+                        p.isCorretta(),
+                        p.getDifficolta(),
+                        p.getPunteggio(),
+                        p.getGiocataIl() != null ? p.getGiocataIl().toString() : null
+                ))
+                .toList();
+
         return new ProfiloDto(
-                u.getId(),
-                u.getUsername(),
-                u.getEmail() != null ? u.getEmail() : "",
-                u.getAvatar(),
-                u.getCreatoIl().toString(),
-                tot, cor, pts, pct
+                utente.getUsername(),
+                totale, corrette, sbagliate, punteggio,
+                totaleFacile, totaleMedio, totaleDifficile,
+                corretteFacile, corretteMedio, corretteDifficile,
+                streak,
+                ultime
         );
     }
 

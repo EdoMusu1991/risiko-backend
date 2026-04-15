@@ -2,11 +2,16 @@ package com.risiko.service;
 
 import com.risiko.dto.*;
 import com.risiko.model.Obiettivo;
+import com.risiko.model.Partita;
 import com.risiko.model.StatisticheUtente;
+import com.risiko.model.Utente;
 import com.risiko.repository.ObiettivoRepository;
+import com.risiko.repository.PartitaRepository;
 import com.risiko.repository.StatisticheRepository;
+import com.risiko.repository.UtenteRepository;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
@@ -31,6 +36,9 @@ public class QuizService {
     private final ObiettivoRepository obiettivoRepo;
     private final StatisticheRepository statRepo;
     private final TeoriaService teoriaService;
+    private final UtenteRepository utenteRepo;
+    private final PartitaRepository partitaRepo;
+
 
     /**
      * Sessione: sessionId -> (territori del giocatore, difficoltà)
@@ -41,10 +49,12 @@ public class QuizService {
 
     public QuizService(ObiettivoRepository obiettivoRepo,
                        StatisticheRepository statRepo,
-                       TeoriaService teoriaService) {
+                       TeoriaService teoriaService, UtenteRepository utenteRepo, PartitaRepository partitaRepo) {
         this.obiettivoRepo = obiettivoRepo;
         this.statRepo = statRepo;
         this.teoriaService = teoriaService;
+        this.utenteRepo = utenteRepo;
+        this.partitaRepo = partitaRepo;
     }
 
     // =========================================================
@@ -159,7 +169,22 @@ public class QuizService {
             }
 
             aggiornaStat(req.userId(), corretta);
-
+            // Salva la partita nel DB
+                        try {
+                            Utente utente = utenteRepo.findByUsername(req.userId()).orElse(null);
+                            if (utente != null) {
+                                Partita partita = new Partita();
+                                partita.setUtente(utente);
+                                partita.setDifficolta(session.difficolta());
+                                partita.setCorretta(corretta);
+                                partita.setPunteggio(punti);
+                                partita.setObiettivoId(idCompatibili.isEmpty() ? null : idCompatibili.get(0));
+                                partita.setGiocataIl(LocalDateTime.now());
+                                partitaRepo.save(partita);
+                            }
+                        } catch (Exception e) {
+                            // non bloccare il flusso se il salvataggio fallisce
+                        }
             risultati.add(new RisultatoGiocatoreDto(
                     risposta.colore(), corretta,
                     idCompatibili, nomiCompatibili,

@@ -1,14 +1,22 @@
 package com.risiko.dto;
 
-/** Profilo utente con statistiche aggregate */
+import java.util.List;
+
 public record ProfiloDto(
-    Long id,
-    String username,
-    String email,
-    String avatar,
-    String creatoIl,
-    long totPartite,
-    long corrette,
-    long punti,
-    long percentuale
+        String username,
+        int partiteTotali,
+        int partiteCorrette,
+        int partiteSbagliate,
+        int punteggioTotale,
+
+        // Per difficoltà — nomi che combaciano col frontend Angular
+        int totaleFacile,
+        int totaleMedia,        // "medio" nel frontend cerca totaleMedio → cambia qui o nel TS
+        int totaleDifficile,
+        int corretteFacile,
+        int corretteMedio,
+        int corretteDifficile,
+
+        int streakCorrente,
+        List<PartitaRistoDto> ultimePartite   // ← chiave usata nel frontend
 ) {}
