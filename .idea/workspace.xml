@@ -4,42 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="be46a949-4d1c-47b8-820a-6eb1e2f853c1" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/controller/SimulazioneController.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/ClassificaSimulazioneDto.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/DettaglioRisposta.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/HintDto.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/IndovinaObiettiviRequest.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/NuovaSimulazioneDto.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/NuovaSimulazioneRequest.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/RisultatoSimulazioneDto.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/SimulazioneRiepilogoDto.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/SnapshotTurnoDto.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/StatSimulazioneDto.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/TerritoryStateDto.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/model/GiocatoreSimulato.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/model/HintUsato.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/model/SimulazionePartita.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/model/SimulazioneRisultato.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/repository/GiocatoreSimulatoRepository.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/repository/HintUsatoRepository.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/repository/SimulazionePartitaRepository.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/repository/SimulazioneRisultatoRepository.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/AIPlayerService.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/ObiettivoInferencer.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/RisikoBoardData.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/SimulazioneCleanupJob.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/SimulazioneService.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/TerritoryState.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/resources/static/341.fe764bb39b4ea136.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/resources/static/687.df1e529c21c50048.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/resources/static/705.a4570ece54ab3fe1.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/resources/static/common.c7a905b056a529de.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/resources/static/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/resources/static/index.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/resources/static/main.a26340536c9d44ea.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/resources/static/runtime.6c3066d00024c68f.js" beforeDir="false" />
-    </list>
+    <list default="true" id="be46a949-4d1c-47b8-820a-6eb1e2f853c1" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -77,7 +42,7 @@
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
     "RunOnceActivity.git.unshallow": "true",
-    "git-widget-placeholder": "feature/simulazione",
+    "git-widget-placeholder": "main",
     "kotlin-language-version-configured": "true",
     "last_opened_file_path": "C:/Users/edoardo.musumeci/Desktop/Documenti personali/INDOVINA_OBBIETTIVI/risiko-fullstack/risiko-backend/src/main/java/com/risiko/dto",
     "project.structure.last.edited": "Project",
