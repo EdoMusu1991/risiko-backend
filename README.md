@@ -83,7 +83,7 @@ Authorization: Bearer eyJhbGc...
 ```
 
 ---
-
+ 
 ## Punteggio
 - Facile corretto: 10 punti
 - Medio corretto: 20 punti  
