@@ -78,7 +78,7 @@ Dopo login/register ricevi:
 ```
 
 Nelle chiamate protette aggiungi l'header:
-```
+``` 
 Authorization: Bearer eyJhbGc...
 ```
 
