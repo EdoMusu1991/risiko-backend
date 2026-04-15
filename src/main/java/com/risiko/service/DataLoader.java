@@ -30,7 +30,7 @@ public class DataLoader implements CommandLineRunner {
                 "alaska","alberta","america_centrale","groenlandia","ontario","quebec",
                 "stati_uniti_occidentali","stati_uniti_orientali","territori_del_nord_ovest",
                 "argentina","brasile","peru","venezuela",
-                "australia_occidentale","nuova_guinea","indonesia","siam","india","medio_oriente",
+                "australia_orientale","nuova_guinea","indonesia","siam","india","medio_oriente",
                 "africa_del_nord","congo","egitto","africa_orientale"
             )),
 

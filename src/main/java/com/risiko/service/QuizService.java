@@ -114,7 +114,9 @@ public class QuizService {
             if (session == null) {
                 risultati.add(new RisultatoGiocatoreDto(
                         risposta.colore(), false, List.of(), List.of(),
-                        false, 0, "Sessione scaduta, ricarica la plancia."));
+                        false, 0, "Sessione scaduta, ricarica la plancia.",
+                        List.of()  // ← obiettiviSceltiUtente vuoto
+                ));
                 continue;
             }
 
@@ -188,7 +190,9 @@ public class QuizService {
             risultati.add(new RisultatoGiocatoreDto(
                     risposta.colore(), corretta,
                     idCompatibili, nomiCompatibili,
-                    nessunCompatibile, punti, spiegazione));
+                    nessunCompatibile, punti, spiegazione,
+                    new ArrayList<>(sceltaUtente)  // ← NUOVO
+            ));
         }
 
         boolean tuttiCorretti = risultati.stream().allMatch(RisultatoGiocatoreDto::corretta);
