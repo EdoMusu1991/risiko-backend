@@ -66,6 +66,24 @@ public class StatisticheController {
         return ResponseEntity.ok(andamento);
     }
 
+    @GetMapping("/classifica")
+    public ResponseEntity<?> getClassifica() {
+        List<Object[]> rows = partitaRepository.getClassifica();
+        List<Map<String, Object>> risultato = new ArrayList<>();
+        int pos = 1;
+        for (Object[] row : rows) {
+            Map<String, Object> r = new HashMap<>();
+            r.put("posizione",   pos++);
+            r.put("username",    row[1]);
+            r.put("avatar",      row[2]);
+            r.put("totPunti",    row[3]);
+            r.put("totPartite",  row[4]);
+            r.put("totCorrette", row[5]);
+            risultato.add(r);
+        }
+        return ResponseEntity.ok(risultato);
+    }
+
     // ── ACCURATEZZA PER OBIETTIVO ────────────────────────────────────────────
     @GetMapping("/obiettivi")
     public ResponseEntity<?> getAccuratezzaObiettivi(Authentication auth) {
