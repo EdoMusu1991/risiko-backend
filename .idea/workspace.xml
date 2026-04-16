@@ -6,19 +6,6 @@
   <component name="ChangeListManager">
     <list default="true" id="be46a949-4d1c-47b8-820a-6eb1e2f853c1" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/risiko/dto/SnapshotTurnoDto.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/risiko/dto/SnapshotTurnoDto.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/risiko/service/AIPlayerService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/AIPlayerService.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/risiko/service/RisikoBoardData.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/RisikoBoardData.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/risiko/service/SimulazioneService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/SimulazioneService.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/risiko/service/TerritoryState.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/TerritoryState.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/target/classes/com/risiko/dto/SnapshotTurnoDto.class" beforeDir="false" afterPath="$PROJECT_DIR$/target/classes/com/risiko/dto/SnapshotTurnoDto.class" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/target/classes/com/risiko/service/AIPlayerService$1Pressione.class" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/target/classes/com/risiko/service/AIPlayerService$AttaccoCandidate.class" beforeDir="false" afterPath="$PROJECT_DIR$/target/classes/com/risiko/service/AIPlayerService$AttaccoCandidate.class" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/target/classes/com/risiko/service/AIPlayerService$SdadataResult.class" beforeDir="false" afterPath="$PROJECT_DIR$/target/classes/com/risiko/service/AIPlayerService$SdadataResult.class" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/target/classes/com/risiko/service/AIPlayerService$TurnoResult.class" beforeDir="false" afterPath="$PROJECT_DIR$/target/classes/com/risiko/service/AIPlayerService$TurnoResult.class" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/target/classes/com/risiko/service/AIPlayerService.class" beforeDir="false" afterPath="$PROJECT_DIR$/target/classes/com/risiko/service/AIPlayerService.class" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/target/classes/com/risiko/service/SimulazioneService.class" beforeDir="false" afterPath="$PROJECT_DIR$/target/classes/com/risiko/service/SimulazioneService.class" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/target/classes/com/risiko/service/TerritoryState.class" beforeDir="false" afterPath="$PROJECT_DIR$/target/classes/com/risiko/service/TerritoryState.class" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
