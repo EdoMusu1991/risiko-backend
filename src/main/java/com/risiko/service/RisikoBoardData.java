@@ -79,11 +79,11 @@ public class RisikoBoardData {
         a.put("ucraina",               Arrays.asList("scandinavia","europa_settentrionale","europa_meridionale","medio_oriente","afghanistan","urali"));
         a.put("africa_settentrionale", Arrays.asList("europa_occidentale","europa_meridionale","brasile","egitto","africa_orientale","congo"));
         a.put("egitto",                Arrays.asList("europa_meridionale","africa_settentrionale","africa_orientale","medio_oriente"));
-        a.put("africa_orientale",      Arrays.asList("egitto","africa_settentrionale","congo","africa_meridionale","madagascar","medio_oriente"));
+        a.put("africa_orientale",      Arrays.asList("egitto","africa_settentrionale","congo","africa_meridionale","madagascar"));
         a.put("congo",                 Arrays.asList("africa_settentrionale","africa_orientale","africa_meridionale"));
         a.put("africa_meridionale",    Arrays.asList("congo","africa_orientale","madagascar"));
         a.put("madagascar",            Arrays.asList("africa_orientale","africa_meridionale"));
-        a.put("medio_oriente",         Arrays.asList("europa_meridionale","ucraina","egitto","africa_orientale","afghanistan","india"));
+        a.put("medio_oriente",         Arrays.asList("europa_meridionale","ucraina","egitto","afghanistan","india"));
         a.put("afghanistan",           Arrays.asList("ucraina","medio_oriente","india","cina","urali"));
         a.put("india",                 Arrays.asList("medio_oriente","afghanistan","cina","asia_sudorientale"));
         a.put("urali",                 Arrays.asList("ucraina","afghanistan","cina","siberia"));

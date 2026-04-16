@@ -10,5 +10,7 @@ public record SnapshotTurnoDto(
         List<AttaccoEventoDto>         attacchi,
         Map<String, StatoCarteDto>     statoCarte,
         List<EventoCartinaDto>         cartine,
-        List<EventoTrisDto>            tris
+        List<EventoTrisDto>            tris,
+        String                         fase,      //  "PIAZZAMENTO","TRIS","RINFORZI","ATTACCHI","SPOSTAMENTO","RIEPILOGO"
+        String                         giocatore  //  "BLU","ROSSO","VERDE","GIALLO" o null
 ) {}

@@ -38,33 +38,23 @@ public class SimulazioneService {
 
 
     // ── GENERA SIMULAZIONE ────────────────────────────────────────────────────
+// ── MODIFICA A generaSimulazione() ─────────────────────────────────────────
+// Sostituisci l'intero metodo generaSimulazione con questo:
 
     public NuovaSimulazioneDto generaSimulazione(NuovaSimulazioneRequest req) {
         String diff  = req.difficolta().toUpperCase();
-        int    turni = switch (diff) {
-            case "FACILE" -> 35;  // 35 normali + T25(≤4) T26(≤5) T27(≤6) T28+(≤7)
-            case "MEDIO"  -> 20;  // nessuna sdadata (parte dal turno 25)
-            default       -> req.turni();
-        };
+        int    turni = 45;
 
-        Map<String, TerritoryState> mappa              = inizializzaMappa();
-        Map<String, Integer>        obiettiviPerColore = assegnaObiettivi();
-        // Boost territori in obiettivo: portali ad almeno 8-10 armate
-        obiettiviPerColore.forEach((colore, obiettivoId) -> {
-            RisikoBoardData.ObiettivoTarget obj = RisikoBoardData.OBIETTIVI.get(obiettivoId);
-            if (obj == null) return;
-            mappa.forEach((territorio, state) -> {
-                if (!colore.equals(state.getColore())) return;
-                boolean inObj = (obj.continentiTarget() != null &&
-                        obj.continentiTarget().stream().anyMatch(cont ->
-                                RisikoBoardData.CONTINENTI.getOrDefault(cont, List.of()).contains(territorio)))
-                        || (obj.territoriSpecifici() != null &&
-                        obj.territoriSpecifici().contains(territorio));
-                if (inObj && state.getArmate() < 8) {
-                    state.setArmate(8 + RANDOM.nextInt(3)); // 8-10 armate in obiettivo
-                }
-            });
-        });
+        // 1. Assegna obiettivi
+        Map<String, Integer> obiettiviPerColore = assegnaObiettivi();
+
+        // 2. Inizializza mappa CON la fase di piazzamento
+        Map.Entry<Map<String, TerritoryState>, List<String>> piazzamento =
+                inizializzaMappaConPiazzamento(obiettiviPerColore);
+        Map<String, TerritoryState> mappa        = piazzamento.getKey();
+        List<String>                logPiazz     = piazzamento.getValue();
+
+        // 3. Salva partita e giocatori
         SimulazionePartita sim = new SimulazionePartita();
         sim.setCreataIl(LocalDateTime.now());
         sim = simRepo.save(sim);
@@ -77,70 +67,290 @@ public class SimulazioneService {
             giocatoreRepo.save(g);
         }
 
+        // 4. Snapshot turno 0 = stato dopo il piazzamento
         List<SnapshotTurnoDto> snapshots = new ArrayList<>();
-        snapshots.add(creaSnapshot(0, mappa, buildLogIniziale(mappa, diff, turni),
-                List.of(), Map.of(), List.of(), List.of()));
-        Set<String> attivi = new LinkedHashSet<>(Arrays.asList(COLORI));
-        boolean partitaFinita = false;
+        snapshots.add(creaSnapshot(0, mappa, logPiazz, List.of(), Map.of(), List.of(), List.of(), "PIAZZAMENTO", null));
+
+
+        Set<String> attivi      = new LinkedHashSet<>(Arrays.asList(COLORI));
+        boolean     partitaFinita = false;
 
         for (int t = 1; t <= turni && !partitaFinita; t++) {
-            List<String> logTurno = new ArrayList<>();
-            logTurno.add("══════ TURNO " + t + " / " + turni + " ══════");
 
-            // Accumula eventi di tutti i giocatori del turno
-            List<AttaccoEventoDto>     attacchiTurno  = new ArrayList<>();
-            Map<String, StatoCarteDto> stateCarteTurno = new LinkedHashMap<>();
-            List<EventoCartinaDto>     cartineTurno   = new ArrayList<>();
-            List<EventoTrisDto>        trisTurno      = new ArrayList<>();
+            List<String> logTurnoCompleto = new ArrayList<>();
+            logTurnoCompleto.add("══════ TURNO " + t + " / " + turni + " ══════");
+
+            // Ordine mosse: BLU, ROSSO, VERDE, GIALLO (ordine di mano)
+            // Ordine sdadata: GIALLO, VERDE, ROSSO, BLU (ordine inverso, 4° inizia primo)
+            String[] ordineSdadata = {"GIALLO", "VERDE", "ROSSO", "BLU"};
 
             for (String colore : List.copyOf(attivi)) {
+
                 if (aiService.getTerritoriGiocatore(colore, mappa).isEmpty()) {
                     attivi.remove(colore);
-                    logTurno.add("💀 " + lbl(colore) + " è stato eliminato!");
+                    logTurnoCompleto.add("💀 " + lbl(colore) + " è stato eliminato!");
                     continue;
                 }
 
-                AIPlayerService.TurnoResult risultato = aiService.eseguiTurno(
-                        colore, obiettiviPerColore.get(colore), t, mappa);
-                logTurno.addAll(risultato.log());
+                List<AIPlayerService.FaseResult> fasi =
+                        aiService.eseguiFasi(colore, obiettiviPerColore.get(colore), t, mappa);
 
-                risultato.attacchi().forEach(e -> attacchiTurno.add(new AttaccoEventoDto(e.da(), e.verso(), e.coloreAttaccante(), e.coloreDifensore(), e.conquistato())));
-                risultato.statoCarte().forEach((c, s) -> stateCarteTurno.put(c, new StatoCarteDto(s.fanti(), s.cannoni(), s.cavalli(), s.jolly(), s.totale())));
-                risultato.cartine().forEach(c -> cartineTurno.add(new EventoCartinaDto(c.coloreOffre(), c.coloreRiceve(), c.territorio())));
-                risultato.tris().forEach(tr -> trisTurno.add(new EventoTrisDto(tr.colore(), tr.bonus(), tr.tipo())));
+                for (AIPlayerService.FaseResult fase : fasi) {
 
-                if (risultato.sdadata() != null && risultato.sdadata().riuscita()) {
-                    logTurno.add("🏆 " + lbl(colore) + " vince con la sdadata!");
-                    snapshots.add(creaSnapshot(t, mappa, logTurno,
-                            attacchiTurno, stateCarteTurno, cartineTurno, trisTurno));
-                    partitaFinita = true;
-                    break;
+                    // ← AGGIUNGI QUESTE DICHIARAZIONI
+                    List<AttaccoEventoDto> attacchiF = fase.attacchi().stream()
+                            .map(e -> new AttaccoEventoDto(e.da(), e.verso(),
+                                    e.coloreAttaccante(), e.coloreDifensore(), e.conquistato()))
+                            .collect(Collectors.toList());
+
+                    Map<String, StatoCarteDto> carteF = new LinkedHashMap<>();
+                    fase.statoCarte().forEach((c, s) -> carteF.put(c,
+                            new StatoCarteDto(s.fanti(), s.cannoni(), s.cavalli(), s.jolly(), s.totale())));
+
+                    List<EventoCartinaDto> cartineF = fase.cartine().stream()
+                            .map(c -> new EventoCartinaDto(c.coloreOffre(), c.coloreRiceve(), c.territorio()))
+                            .collect(Collectors.toList());
+
+                    List<EventoTrisDto> trisF = fase.tris().stream()
+                            .map(tr -> new EventoTrisDto(tr.colore(), tr.bonus(), tr.tipo()))
+                            .collect(Collectors.toList());
+
+                    // ... poi la riga che già hai:
+                    snapshots.add(creaSnapshot(t, mappa, fase.log(),
+                            attacchiF, carteF, cartineF, trisF, fase.fase(), fase.colore()));
                 }
 
+                // Controlla eliminazioni
                 for (String altro : List.copyOf(attivi)) {
-                    if (!altro.equals(colore) && aiService.getTerritoriGiocatore(altro, mappa).isEmpty()) {
+                    if (!altro.equals(colore) &&
+                            aiService.getTerritoriGiocatore(altro, mappa).isEmpty()) {
                         attivi.remove(altro);
-                        logTurno.add("💀 " + lbl(altro) + " è stato eliminato!");
                     }
                 }
             }
+
+            // ── FASE SDADATA (dal turno 35, ordine inverso di mano) ──────────────
+            if (t >= 35 && !partitaFinita) {
+                for (String colore : ordineSdadata) {
+                    if (!attivi.contains(colore)) continue;
+
+                    AIPlayerService.SdadataResult sd =
+                            aiService.valutaSdadata(colore, obiettiviPerColore.get(colore), t, mappa);
+
+                    List<String> logSd = new ArrayList<>();
+                    if (sd != null && sd.tentato()) {
+                        if (sd.riuscita()) {
+                            logSd.add("🎲 " + lbl(colore) + " SDADATA! "
+                                    + sd.dado1() + "+" + sd.dado2()
+                                    + "=" + sd.totale() + " ≤ " + sd.soglia());
+                            logSd.add("⏱ La partita è terminata.");
+                            snapshots.add(creaSnapshot(t, mappa, logSd,
+                                    List.of(), Map.of(), List.of(), List.of(), "SDADATA", colore));
+                            partitaFinita = true;
+                            break;
+                        } else {
+                            logSd.add("🎲 " + lbl(colore) + " tenta sdadata: "
+                                    + sd.dado1() + "+" + sd.dado2()
+                                    + "=" + sd.totale() + " > " + sd.soglia() + " (fallita)");
+                            snapshots.add(creaSnapshot(t, mappa, logSd,
+                                    List.of(), Map.of(), List.of(), List.of(), "SDADATA", colore));
+                        }
+                    }
+                }
+            }
+
+            // ── FINE TURNO ───────────────────────────────────────────────────────
             if (!partitaFinita) {
-                aggiungiRiepilogoContinenti(logTurno, mappa);
-                snapshots.add(creaSnapshot(t, mappa, logTurno,
-                        attacchiTurno, stateCarteTurno, cartineTurno, trisTurno));
+                List<String> logRiepilogo = new ArrayList<>();
+                aggiungiRiepilogoContinenti(logRiepilogo, mappa);
+                if (!logRiepilogo.isEmpty()) {
+                    snapshots.add(creaSnapshot(t, mappa, logRiepilogo,
+                            List.of(), Map.of(), List.of(), List.of(), "RIEPILOGO", null));
+                }
 
                 if (attivi.size() == 1) {
                     String vincitore = attivi.iterator().next();
                     snapshots.add(creaSnapshot(t + 1, mappa,
-                            List.of("🏆 " + lbl(vincitore) + " ha conquistato il mondo! Simulazione terminata."),
-                            List.of(), Map.of(), List.of(), List.of()));
-                    break;
+                            List.of("🏆 " + lbl(vincitore) + " ha conquistato il mondo!"),
+                            List.of(), Map.of(), List.of(), List.of(), "FINE", null));
+                    partitaFinita = true;
+                }
+
+                // Turno 45 = fine obbligatoria
+                if (t == 45 && !partitaFinita) {
+                    snapshots.add(creaSnapshot(t, mappa,
+                            List.of("⏱ Turno limite raggiunto. Simulazione terminata."),
+                            List.of(), Map.of(), List.of(), List.of(), "FINE", null));
+                    partitaFinita = true;
                 }
             }
         }
 
+
+
         return new NuovaSimulazioneDto(sim.getId(), turni, diff, snapshots);
     }
+
+// ── NUOVI METODI PRIVATI da aggiungere in SimulazioneService ───────────────
+
+    /**
+     * Crea la mappa iniziale con 1 armata per territorio
+     * e poi esegue il piazzamento dei 30 carri per ogni giocatore.
+     */
+    private Map.Entry<Map<String, TerritoryState>, List<String>>
+    inizializzaMappaConPiazzamento(Map<String, Integer> obiettiviPerColore) {
+
+        List<String> tutti = new ArrayList<>(RisikoBoardData.TUTTI_TERRITORI);
+        Collections.shuffle(tutti, RANDOM);
+
+        // Quote casualizzate: 2 giocatori con 10, 2 con 11
+        int[] quote = {10, 10, 11, 11};
+
+        // Assegna territori con 1 armata
+        Map<String, TerritoryState> mappa = new LinkedHashMap<>();
+        Map<String, List<String>>   territoriPerColore = new LinkedHashMap<>();
+        int idx = 0;
+        for (int p = 0; p < COLORI.length; p++) {
+            String colore = COLORI[p];
+            List<String> miei = new ArrayList<>();
+            for (int t = 0; t < quote[p]; t++) {
+                String terr = tutti.get(idx++);
+                mappa.put(terr, new TerritoryState(colore, 1));
+                miei.add(terr);
+            }
+            territoriPerColore.put(colore, miei);
+        }
+
+        List<String> logPiazz = new ArrayList<>();
+        logPiazz.add("⚑ PIAZZAMENTO INIZIALE — ogni giocatore distribuisce 30 carri");
+        logPiazz.add("");
+
+        // Piazza i 30 carri per ogni giocatore
+        for (int p = 0; p < COLORI.length; p++) {
+            String colore     = COLORI[p];
+            int    obiettivoId = obiettiviPerColore.get(colore);
+            List<String> miei  = territoriPerColore.get(colore);
+            int nTerr          = miei.size();
+
+            // Ordina: i più importanti in cima (ricevono 3 carri)
+            List<String> ordinati = ordinaPiazzamento(colore, obiettivoId, miei, mappa);
+
+            if (nTerr == 10) {
+                // 10 territori × 3 = 30 ✓ — tutti a 3
+                ordinati.forEach(t -> mappa.get(t).setArmate(3));
+                logPiazz.add("🪖 " + lbl(colore) + " (10 territori) → tutti a 3 carri");
+            } else {
+                // 11 territori: 9×3 + 1×2 + 1×1 = 30 ✓
+                for (int i = 0; i < ordinati.size(); i++) {
+                    mappa.get(ordinati.get(i)).setArmate(i < 9 ? 3 : i == 9 ? 2 : 1);
+                }
+                logPiazz.add("🪖 " + lbl(colore) + " (11 territori) → 9 a 3, "
+                        + nomLegg(ordinati.get(9))  + " a 2, "
+                        + nomLegg(ordinati.get(10)) + " a 1");
+            }
+        }
+
+        logPiazz.add("");
+        for (String colore : COLORI) {
+            long nT  = mappa.values().stream().filter(ts -> colore.equals(ts.getColore())).count();
+            int  tot = mappa.values().stream().filter(ts -> colore.equals(ts.getColore()))
+                    .mapToInt(TerritoryState::getArmate).sum();
+            logPiazz.add("  " + lbl(colore) + ": " + nT + " territori, " + tot + " carri totali");
+        }
+        logPiazz.add("");
+        logPiazz.add("🎯 Osserva le mosse e indovina l'obiettivo di ogni giocatore!");
+
+        return Map.entry(mappa, logPiazz);
+    }
+
+    /**
+     * Ordina i territori dal più importante (riceve 3) al meno importante (riceve 1).
+     *
+     * Score alto = territorio da difendere con 3 carri.
+     * Score basso = territorio sacrificabile (2 o 1 carro).
+     *
+     * Criteri per ricevere MENO carri (score basso):
+     *  1. Fuori obiettivo                     ← taglio prioritario
+     *  2. Non blocca continente avversario
+     *  3. Crea nicchia (tutti adiacenti miei) ← meno urgente difenderlo
+     *  4. Non è ponte verso continente vuoto
+     *  5. Pochi punti (poche adiacenze)
+     */
+    private List<String> ordinaPiazzamento(String colore, int obiettivoId,
+                                           List<String> miei,
+                                           Map<String, TerritoryState> mappa) {
+        RisikoBoardData.ObiettivoTarget obj = RisikoBoardData.OBIETTIVI.get(obiettivoId);
+
+        return miei.stream()
+                .sorted(Comparator.comparingInt((String t) ->
+                        scoreImportanzaIniziale(t, colore, miei, mappa, obj)).reversed())
+                .collect(Collectors.toList());
+    }
+
+    private int scoreImportanzaIniziale(String t, String colore,
+                                        List<String> miei,
+                                        Map<String, TerritoryState> mappa,
+                                        RisikoBoardData.ObiettivoTarget obj) {
+        int score = 0;
+
+        // 1. In obiettivo: importantissimo, non si taglia mai
+        if (isInObiettivo(t, obj)) score += 1000;
+
+        // 2. Territorio critico per bloccare un continente avversario
+        for (Map.Entry<String, List<String>> ce : RisikoBoardData.CONTINENTI.entrySet()) {
+            List<String> tc = ce.getValue();
+            if (!tc.contains(t)) continue;
+            boolean critico = mappa.entrySet().stream()
+                    .filter(e -> tc.contains(e.getKey()) && !colore.equals(e.getValue().getColore()))
+                    .collect(Collectors.groupingBy(e -> e.getValue().getColore(), Collectors.counting()))
+                    .values().stream().anyMatch(n -> n >= tc.size() - 1);
+            if (critico) score += 500;
+        }
+
+        // 3. Nicchia: tutti gli adiacenti sono miei → al sicuro, posso lasciarlo con meno
+        boolean nicchia = RisikoBoardData.ADIACENZE.getOrDefault(t, List.of()).stream()
+                .allMatch(adj -> miei.contains(adj));
+        if (nicchia) score -= 300;
+
+        // 4. Ponte verso continente dove non ho nessun territorio
+        for (Map.Entry<String, List<String>> ce : RisikoBoardData.CONTINENTI.entrySet()) {
+            List<String> tc = ce.getValue();
+            if (tc.contains(t)) continue;
+            boolean hoNessuno = tc.stream().noneMatch(miei::contains);
+            boolean sonoPonte = RisikoBoardData.ADIACENZE.getOrDefault(t, List.of())
+                    .stream().anyMatch(tc::contains);
+            if (hoNessuno && sonoPonte) score += 150;
+        }
+
+        // 5. Valore punti (adiacenze = punti): più adiacenze → più importante
+        int adiacenze = RisikoBoardData.ADIACENZE.getOrDefault(t, List.of()).size();
+        score += adiacenze * 10;
+
+        return score;
+    }
+
+    private boolean isInObiettivo(String territorio, RisikoBoardData.ObiettivoTarget obj) {
+        if (obj == null) return false;
+        if (obj.territoriSpecifici() != null && obj.territoriSpecifici().contains(territorio))
+            return true;
+        if (obj.continentiTarget() != null) {
+            for (String cont : obj.continentiTarget()) {
+                List<String> tc = RisikoBoardData.CONTINENTI.get(cont);
+                if (tc != null && tc.contains(territorio)) return true;
+            }
+        }
+        return false;
+    }
+
+    private String nomLegg(String t) {
+        if (t == null) return "";
+        String s = t.replace("_", " ");
+        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    }
+
+// ── RIMUOVI il vecchio inizializzaMappa() ─────────────────────────────────
+// (il metodo con 2 + RANDOM.nextInt(3) o 6 + RANDOM.nextInt(2) non serve più)
+
     // ── HINT ─────────────────────────────────────────────────────────────────
 
     public HintDto getHint(Long simId, String colore) {
@@ -271,10 +481,7 @@ public class SimulazioneService {
         List<String> tutti = new ArrayList<>(RisikoBoardData.TUTTI_TERRITORI);
         Collections.shuffle(tutti, RANDOM);
         int[] dims = {10, 10, 11, 11};
-        for (int i = dims.length - 1; i > 0; i--) {
-            int j = RANDOM.nextInt(i + 1);
-            int tmp = dims[i]; dims[i] = dims[j]; dims[j] = tmp;
-        }
+
         Map<String, TerritoryState> mappa = new LinkedHashMap<>();
         int idx = 0;
         for (int p = 0; p < COLORI.length; p++)
@@ -297,11 +504,13 @@ public class SimulazioneService {
                                           List<AttaccoEventoDto> attacchi,
                                           Map<String, StatoCarteDto> statoCarte,
                                           List<EventoCartinaDto> cartine,
-                                          List<EventoTrisDto> tris) {
+                                          List<EventoTrisDto> tris,
+                                          String fase,      // ← NUOVO
+                                          String giocatore) { // ← NUOVO
         Map<String, TerritoryStateDto> snap = new LinkedHashMap<>();
         mappa.forEach((k, v) -> snap.put(k, new TerritoryStateDto(v.getColore(), v.getArmate())));
         return new SnapshotTurnoDto(turno, snap, new ArrayList<>(logAzioni),
-                attacchi, statoCarte, cartine, tris);
+                attacchi, statoCarte, cartine, tris, fase, giocatore);
     }
 
     private List<String> buildLogIniziale(Map<String, TerritoryState> mappa, String diff, int turni) {
