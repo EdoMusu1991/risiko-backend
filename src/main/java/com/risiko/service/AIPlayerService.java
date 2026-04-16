@@ -58,6 +58,10 @@ public class AIPlayerService {
     private final Map<String, String> territoriCartina = new HashMap<>();
     // Armate precedenti per rilevare spostamenti (territorio → armate turno prima)
     private final Map<String, Integer> armaturePrecedenti = new HashMap<>();
+    // Turni in cui un territorio è rimasto a 2 armate (segnale cartina): territorio → turni
+    private final Map<String, Integer> turniTerritorioScoperto = new HashMap<>();
+    // Turno in cui è stata offerta la cartina: colore → turno
+    private final Map<String, Integer> turnoOffertaCartina = new HashMap<>();
 
     // ── Inferenza obiettivi avversari ─────────────────────────────────────────
     private final ObiettivoInferencer inferencer = new ObiettivoInferencer();
@@ -290,6 +294,10 @@ public class AIPlayerService {
         eventiAttaccoTurno.clear();
         eventiCartinaTurno.clear();
         eventiTrisTurno.clear();
+        // Rimuovi marker territorio cartina conquistato (vale solo nel turno stesso)
+        territoriCartina.remove(colore + "_conquistato");
+        // Rimuovi flag spostamento cartina (vale solo nel turno stesso)
+        territoriCartina.remove(colore + "_spostato");
 
         // ── FASE 1: TRIS ──────────────────────────────────────────────────────
         {
@@ -330,7 +338,7 @@ public class AIPlayerService {
             }
 
             // Cartina
-            gestisciCartina(colore, obiettivoId, mappa, log);
+            gestisciCartina(colore, obiettivoId, turno, mappa, log);
 
             if (log.size() > 1) {
                 fasi.add(new FaseResult("ATTACCHI", colore, turno, new ArrayList<>(log),
@@ -345,7 +353,7 @@ public class AIPlayerService {
         {
             List<String> log = new ArrayList<>();
             log.add("🚀 " + lbl(colore) + " — Fase spostamento (T" + turno + ")");
-            eseguiSpostamento(colore, obiettivoId, mappa, log);
+            eseguiSpostamento(colore, obiettivoId, turno, mappa, log);
 
             // Sdadata
             SdadataResult sdadata = valutaSdadata(colore, obiettivoId, turno, mappa);
@@ -546,6 +554,99 @@ public class AIPlayerService {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    //  META-PRIORITÀ: PREPARARSI ALLA SDADATA
+    //  Valuta quanto il bot è "pronto" per vincere in sdadata rispetto agli avversari.
+    //  Restituisce un moltiplicatore d'urgenza [0.5 - 2.0]:
+    //   > 1.0 = situazione favorevole → meno urgenza, gioca difensivo
+    //   < 1.0 = situazione sfavorevole → più urgenza, gioca aggressivo
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Calcola l'urgenza di intervenire per migliorare la posizione pre-sdadata.
+     * Considera: punteggio relativo, territori, continenti nemici, obiettivi esclusivi.
+     * Restituisce un bonus di priorità da aggiungere agli attacchi urgenti.
+     */
+    private int calcolaUrgenzaSdadata(String colore, int obiettivoId,
+                                      Map<String, TerritoryState> mappa, int turno) {
+        if (turno > 33) return 0; // in sdadata la logica è diversa
+
+        int urgenza = 0;
+        ObiettivoTarget obj = RisikoBoardData.OBIETTIVI.get(obiettivoId);
+        List<String> miei = getTerritoriGiocatore(colore, mappa);
+        int mioScore = calcolaPunteggioAttuale(colore, obiettivoId, mappa);
+        int maxScoreAvv = getMassimoPunteggioAvversari(colore, mappa);
+
+        // ── 1. DISTACCO PUNTEGGIO ─────────────────────────────────────────────
+        // Se sono indietro di punti rispetto al leader → urgenza alta
+        int distacco = maxScoreAvv - mioScore;
+        if (distacco > 20) urgenza += 300;
+        else if (distacco > 10) urgenza += 150;
+        else if (distacco > 0) urgenza += 50;
+        else urgenza -= 100; // sono in testa → meno urgenza
+
+        // ── 2. TERRITORI RELATIVI ─────────────────────────────────────────────
+        // Chi ha più territori piazza più carri → vantaggio strutturale
+        int maxTerrAvv = mappa.values().stream()
+                .map(TerritoryState::getColore)
+                .filter(c -> !c.equals(colore) && !"?".equals(c))
+                .distinct()
+                .mapToInt(c -> getTerritoriGiocatore(c, mappa).size())
+                .max().orElse(0);
+        if (maxTerrAvv > miei.size() + 2) urgenza += 200; // nemico ha molti più territori
+        else if (maxTerrAvv > miei.size()) urgenza += 80;
+
+        // ── 3. CONTINENTE NEMICO ──────────────────────────────────────────────
+        // Se un avversario ha un continente → +5/+7 rinforzi extra ogni turno
+        // È un vantaggio che si accumula → contrasto urgente
+        boolean nemicoContinente = mappa.values().stream()
+                .map(TerritoryState::getColore)
+                .filter(c -> !c.equals(colore) && !"?".equals(c))
+                .distinct()
+                .anyMatch(c -> {
+                    List<String> loro = getTerritoriGiocatore(c, mappa);
+                    return RisikoBoardData.CONTINENTI.values().stream().anyMatch(loro::containsAll);
+                });
+        if (nemicoContinente) urgenza += 250;
+
+        // ── 4. OBIETTIVO ESCLUSIVO NEMICO ─────────────────────────────────────
+        // Se un avversario ha molti territori in obiettivo che solo lui vuole
+        // (nessun altro li contesta) → vantaggio crescente → contrasto urgente
+        long nemiciConObiettivoPulito = mappa.values().stream()
+                .map(TerritoryState::getColore)
+                .filter(c -> !c.equals(colore) && !"?".equals(c))
+                .distinct()
+                .filter(c -> {
+                    int obAvv = inferencer.getObiettivoPiuProbabile(c);
+                    RisikoBoardData.ObiettivoTarget objAvv = RisikoBoardData.OBIETTIVI.get(obAvv);
+                    if (objAvv == null || objAvv.territoriSpecifici() == null) return false;
+                    List<String> lorTerr = getTerritoriGiocatore(c, mappa);
+                    // Ha già più della metà dei suoi territori in obiettivo esclusivo
+                    long inObj = lorTerr.stream().filter(t -> isInObiettivo(t, objAvv)).count();
+                    return inObj > objAvv.territoriSpecifici().size() / 2;
+                })
+                .count();
+        urgenza += (int)(nemiciConObiettivoPulito * 120);
+
+        // ── 5. MIO OBIETTIVO ESCLUSIVO ────────────────────────────────────────
+        // Se ho territori in obiettivo che solo io voglio → sono in vantaggio
+        if (obj != null && obj.territoriSpecifici() != null) {
+            long mieTerrInObj = miei.stream().filter(t -> isInObiettivo(t, obj)).count();
+            long totaleObj = obj.territoriSpecifici().size();
+            double percentuale = (double) mieTerrInObj / totaleObj;
+            if (percentuale > 0.6) urgenza -= 150; // sono avanti nel mio obiettivo
+            else if (percentuale < 0.3) urgenza += 100; // sono indietro
+        }
+
+        // ── 6. TURNI RIMASTI ALLA SDADATA ─────────────────────────────────────
+        // Avvicinarsi al turno 35 aumenta l'urgenza di sistemare tutto
+        int turniRimasti = 34 - turno;
+        if (turniRimasti <= 5) urgenza = (int)(urgenza * 1.5); // amplifica urgenza finale
+        else if (turniRimasti <= 10) urgenza = (int)(urgenza * 1.2);
+
+        return Math.max(0, urgenza);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     //  RINFORZI
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -593,9 +694,143 @@ public class AIPlayerService {
         List<String> confine = getTerritoriBordoNemico(colore, miei, mappa);
         if (confine.isEmpty()) confine = miei;
 
-        // ── FASE 0: territori interni → riduce a 1 carro ────────────────────
-        // Un territorio con tutti gli adiacenti dello stesso colore è al sicuro:
-        // nessun nemico può attaccarlo. 1 carro basta; le armate in eccesso
+        // ── FASE ASSOLUTA: territori in obiettivo mai a 1-2 armate (salvo nicchia) ──
+        // Questa è la regola più assoluta di tutte — vale a qualsiasi turno,
+        // prima di qualsiasi altra considerazione strategica.
+        // L'Ucraina a 2 armate in sdadata è inaccettabile.
+        {
+            for (String t : new ArrayList<>(miei)) {
+                if (!isInObiettivo(t, obj)) continue;
+                if (mappa.get(t).getArmate() > 2) continue;
+
+                // Nicchia = normalmente al sicuro, MA non per territori in obiettivo
+                // con ≥5 adiacenze (troppo preziosi — se la nicchia si rompe sono esposti)
+                boolean nicchia = getConfinanti(t).stream().allMatch(adj ->
+                        colore.equals(mappa.getOrDefault(adj, new TerritoryState("?",0)).getColore()));
+                int adj = getConfinanti(t).size();
+                if (nicchia && adj < 5) continue; // piccoli in nicchia: ok a 1-2
+
+                // Territorio in obiettivo con ≥5 punti: minimo proporzionale al valore
+                // anche in nicchia (se la nicchia si rompe deve poter resistere)
+                int adjT2 = getConfinanti(t).size();
+                int target = adjT2 >= 6 ? 10 : adjT2 >= 5 ? 8 : 3;
+                int mancanti = target - mappa.get(t).getArmate();
+
+                // Prima usa i rinforzi disponibili
+                if (rim >= mancanti) {
+                    mappa.get(t).setArmate(target);
+                    rim -= mancanti;
+                } else {
+                    // Poi prendi da qualsiasi territorio con più di 3 armate
+                    // (interni prima, poi confine — l'importante è proteggere l'obiettivo)
+                    // In sdadata non scendere sotto 3 rubando armate
+                    int minimoFonte = (turno >= 35) ? 3 : 1;
+                    for (String fonte : miei) {
+                        if (fonte.equals(t)) continue;
+                        if (mappa.get(fonte).getArmate() <= Math.max(3, minimoFonte)) continue;
+                        mappa.get(fonte).setArmate(mappa.get(fonte).getArmate() - 1);
+                        mappa.get(t).setArmate(mappa.get(t).getArmate() + 1);
+                        if (mappa.get(t).getArmate() >= target) break;
+                    }
+                    if (mappa.get(t).getArmate() < target && turno < 35) {
+                        // Solo pre-sdadata: usa anche armate fuori obiettivo con >1
+                        for (String fonte : miei) {
+                            if (fonte.equals(t) || isInObiettivo(fonte, obj)) continue;
+                            if (mappa.get(fonte).getArmate() <= 1) continue;
+                            mappa.get(fonte).setArmate(mappa.get(fonte).getArmate() - 1);
+                            mappa.get(t).setArmate(mappa.get(t).getArmate() + 1);
+                            if (mappa.get(t).getArmate() >= target) break;
+                        }
+                    }
+                }
+                if (mappa.get(t).getArmate() >= target) {
+                    log.add("🔒 " + lbl(colore) + " protegge obiettivo " + nom(t) +
+                            " → " + mappa.get(t).getArmate() + " armate (ASSOLUTO)");
+                }
+            }
+        }
+
+        // ── FASE CRITICA: difesa prioritaria se il bot è a 9-10 territori ────
+        // Scendere sotto 9 territori è molto grave (rinforzi < 3).
+        // Se si è a 9-10 territori, prima di tutto si rinforzano i confini
+        // più deboli per evitare di perderne altri.
+        // Soglia: se armateNemiche > mie × 1.5 su un confine → rinforza subito.
+        int nTerritoMiei = miei.size();
+        if (nTerritoMiei <= 10) {
+            int budgetCritico = (nTerritoMiei == 9) ? rim : rim / 2;
+
+            List<String> confineCritico = confine.stream()
+                    .sorted(Comparator.comparingInt(t -> {
+                        int nemici = getConfinanti(t).stream()
+                                .filter(adj -> {
+                                    TerritoryState st = mappa.getOrDefault(adj, new TerritoryState("?",0));
+                                    return !colore.equals(st.getColore()) && !"?".equals(st.getColore());
+                                })
+                                .mapToInt(adj -> mappa.get(adj).getArmate()).sum();
+                        return -nemici;
+                    }))
+                    .collect(Collectors.toList());
+
+            for (String t : confineCritico) {
+                if (budgetCritico <= 0) break;
+                int attualeT = mappa.get(t).getArmate();
+
+                // Calcola la minaccia pesata: considera il peso del nemico più forte adiacente
+                // (continente = +5/+10 territori equivalenti)
+                int nemiciAdj = getConfinanti(t).stream()
+                        .filter(adj -> {
+                            TerritoryState st = mappa.getOrDefault(adj, new TerritoryState("?",0));
+                            return !colore.equals(st.getColore()) && !"?".equals(st.getColore());
+                        })
+                        .mapToInt(adj -> mappa.get(adj).getArmate()).sum();
+
+                // Peso del nemico più forte adiacente (proporzionale alla dominanza)
+                int pesoMaxNemico = getConfinanti(t).stream()
+                        .filter(adj -> {
+                            TerritoryState st = mappa.getOrDefault(adj, new TerritoryState("?",0));
+                            return !colore.equals(st.getColore()) && !"?".equals(st.getColore());
+                        })
+                        .mapToInt(adj -> calcolaPesoAvversario(
+                                mappa.get(adj).getColore(), mappa))
+                        .max().orElse(0);
+
+                // Margine extra proporzionale alla dominanza del nemico
+                int margineExtra = pesoMaxNemico > 15 ? 5 : pesoMaxNemico > 11 ? 3 : 2;
+
+                if (nemiciAdj > attualeT * 1.5) {
+                    int minimo = Math.min(nemiciAdj + margineExtra, 25);
+                    int aggiunti = Math.min(minimo - attualeT, budgetCritico);
+                    if (aggiunti > 0) {
+                        mappa.get(t).setArmate(attualeT + aggiunti);
+                        rim -= aggiunti;
+                        budgetCritico -= aggiunti;
+                        log.add("🚨 " + lbl(colore) + " difesa critica " + nom(t) +
+                                " (" + attualeT + "→" + (attualeT + aggiunti) +
+                                " | peso nemico=" + pesoMaxNemico + ")");
+                    }
+                }
+            }
+            if (rim <= 0) { log.add("🛡 " + lbl(colore) + " piazza " + rinforzi + " armate"); return; }
+        }
+
+        // ── FASE 0: territori interni → riduce armate liberate per i confini ──
+        // Un territorio interno (tutti adiacenti miei) è al sicuro.
+        // In sdadata (T35+): minimo 3 (mai 1-2, troppo rischioso).
+        // Prima del T35: minimo 1.
+        // In obiettivo: mai sotto 3 in qualsiasi turno.
+        int minimoInterno = (turno >= 35) ? 3 : 1;
+        for (String t : new ArrayList<>(miei)) {
+            boolean interno = getConfinanti(t).stream()
+                    .allMatch(adj -> colore.equals(
+                            mappa.getOrDefault(adj, new TerritoryState("?", 0)).getColore()));
+            if (!interno) continue;
+            int minimoT = isInObiettivo(t, obj) ? Math.max(3, minimoInterno) : minimoInterno;
+            if (mappa.get(t).getArmate() > minimoT) {
+                rim += mappa.get(t).getArmate() - minimoT;
+                mappa.get(t).setArmate(minimoT);
+            }
+        }
+
         // vengono re-immesse nel budget per rinforzare i confini veri.
         for (String t : new ArrayList<>(miei)) {
             boolean interno = getConfinanti(t).stream()
@@ -674,6 +909,53 @@ public class AIPlayerService {
             }
         }
 
+        // ── FASE 0b2: difendi ingressi di continenti già chiusi ─────────────
+        // Se il giocatore controlla un intero continente, difende i suoi ingressi
+        // (territori del continente adiacenti a nemici) con:
+        // min = armate nemiche adiacenti + 5, max = 25
+        // Priorità altissima: perdere 1 territorio = perdere il bonus continente.
+        for (Map.Entry<String, List<String>> ce : RisikoBoardData.CONTINENTI.entrySet()) {
+            List<String> tc = ce.getValue();
+            boolean controlloTotale = tc.stream().allMatch(t ->
+                    colore.equals(mappa.getOrDefault(t, new TerritoryState("?",0)).getColore()));
+            if (!controlloTotale) continue;
+
+            for (String ingresso : tc) {
+                boolean haConfineNemico = getConfinanti(ingresso).stream()
+                        .anyMatch(adj -> {
+                            TerritoryState st = mappa.getOrDefault(adj, new TerritoryState("?",0));
+                            return !colore.equals(st.getColore()) && !"?".equals(st.getColore());
+                        });
+                if (!haConfineNemico) continue;
+
+                int armateNemicheAdj = getConfinanti(ingresso).stream()
+                        .filter(adj -> {
+                            TerritoryState st = mappa.getOrDefault(adj, new TerritoryState("?",0));
+                            return !colore.equals(st.getColore()) && !"?".equals(st.getColore());
+                        })
+                        .mapToInt(adj -> mappa.get(adj).getArmate()).sum();
+
+                // Cap ingresso: proporzionale al valore del continente
+                // Sud America/Oceania: max 12, Africa: max 15, NA/EU/Asia: max 20
+                int capIngresso = switch (ce.getKey()) {
+                    case "nordamerica", "europa", "asia" -> 20;
+                    case "africa" -> 15;
+                    default -> 12; // sudamerica, oceania — basso valore
+                };
+                int minimoIngresso = Math.min(armateNemicheAdj + 5, capIngresso);
+                int attuale = mappa.get(ingresso).getArmate();
+
+                if (attuale < minimoIngresso && rim > 0) {
+                    int aggiunti = Math.min(minimoIngresso - attuale, rim);
+                    mappa.get(ingresso).setArmate(attuale + aggiunti);
+                    rim -= aggiunti;
+                    log.add("🏰 " + lbl(colore) + " difende ingresso " + nom(ingresso) +
+                            " (" + attuale + "→" + (attuale + aggiunti) + " | max 25)");
+                }
+            }
+        }
+        if (rim <= 0) { log.add("🛡 " + lbl(colore) + " piazza " + rinforzi + " armate"); return; }
+
         // ── FASE 0c: territorio in obiettivo sotto pressione 3x ─────────────
         // Se le armate nemiche adiacenti dello stesso colore sommano ≥ 3x
         // le armate del territorio in obiettivo, va rinforzato con priorità alta.
@@ -709,6 +991,66 @@ public class AIPlayerService {
                     log.add("🛡 " + lbl(colore) + " rinforza sotto pressione 3x: "
                             + nom(t) + " (" + mieArmate + "→" + (mieArmate + aggiunti)
                             + " vs " + pressioneMassima + " nemici)");
+                }
+            }
+        }
+        if (rim <= 0) { log.add("🛡 " + lbl(colore) + " piazza " + rinforzi + " armate"); return; }
+
+        // ── FASE 0d: difendi contro avversario che punta al Nord America ────
+        // Se l'inferencer stima che un avversario punta al Nord America
+        // (continente nel suo obiettivo più probabile), e noi abbiamo almeno
+        // 1 territorio lì → difendilo con priorità alta.
+        // La stessa logica vale per Asia e Europa (continenti ad alto bonus).
+        {
+            List<String> continentiAltoValore = List.of("nordamerica", "asia", "europa");
+            for (String cont : continentiAltoValore) {
+                List<String> terrCont = RisikoBoardData.CONTINENTI.getOrDefault(cont, List.of());
+
+                // Ho territori in questo continente?
+                List<String> mieiInCont = miei.stream()
+                        .filter(terrCont::contains).collect(Collectors.toList());
+                if (mieiInCont.isEmpty()) continue;
+
+                // Qualche avversario ha questo continente come obiettivo probabile
+                // E ha già molti territori lì (è vicino a chiuderlo)?
+                boolean minacciaReale = mappa.entrySet().stream()
+                        .filter(e -> terrCont.contains(e.getKey())
+                                && !colore.equals(e.getValue().getColore()))
+                        .collect(Collectors.groupingBy(e -> e.getValue().getColore(), Collectors.counting()))
+                        .entrySet().stream()
+                        .anyMatch(e -> {
+                            // Il nemico ha ≥ metà dei territori del continente
+                            boolean haTerritori = e.getValue() >= terrCont.size() / 2;
+                            // E l'inferencer stima che il suo obiettivo includa questo continente
+                            List<String> contProbabili = inferencer.getContinentiProbabili(e.getKey());
+                            // Oppure il suo peso effettivo è molto alto (>16) → minaccia generale
+                            int peso = calcolaPesoAvversario(e.getKey(), mappa);
+                            return (haTerritori && contProbabili.contains(cont)) || peso > 16;
+                        });
+
+                if (!minacciaReale) continue;
+
+                // Difendi il nostro territorio in quel continente con il più alto valore
+                // (più adiacenze = punto di confine più importante)
+                Optional<String> daRinforzare = mieiInCont.stream()
+                        .filter(confine::contains) // deve essere sul confine
+                        .max(Comparator.comparingInt(t -> getConfinanti(t).size()));
+
+                if (daRinforzare.isEmpty()) daRinforzare = mieiInCont.stream()
+                        .max(Comparator.comparingInt(t -> getConfinanti(t).size()));
+
+                if (daRinforzare.isPresent() && rim > 0) {
+                    String t = daRinforzare.get();
+                    int attuale = mappa.get(t).getArmate();
+                    // Porta il territorio ad almeno 10 armate (soglia anti-conquista)
+                    int minimo = 10;
+                    if (attuale < minimo) {
+                        int aggiunti = Math.min(minimo - attuale, rim);
+                        mappa.get(t).setArmate(attuale + aggiunti);
+                        rim -= aggiunti;
+                        log.add("🔒 " + lbl(colore) + " rinforza " + nom(t) +
+                                " (minaccia " + cont + " → " + (attuale + aggiunti) + " armate)");
+                    }
                 }
             }
         }
@@ -751,28 +1093,206 @@ public class AIPlayerService {
         }
         if (rim <= 0) { log.add("🛡 " + lbl(colore) + " piazza " + rinforzi + " armate"); return; }
 
-        // ── FASE 1 (difesa): porta i territori di confine ad almeno 6 armate ──
-        // Meno di 6 armate = bersaglio facile per la pesca carte nemica.
-        // Usa al massimo metà dei rinforzi per questa fase difensiva.
-        final int MINIMO_DIFESA_CONFINE = 6;
-        int budgetDifesa = Math.max(0, rim / 2);
+        // ── FASE 0e0: territori in obiettivo mai a 1 o 2 armate (salvo nicchia) ──
+        // Un territorio in obiettivo con 1 o 2 armate è indifendibile.
+        // Eccezione: se è in nicchia (tutti gli adiacenti sono miei) è al sicuro.
+        {
+            // Nessuna eccezione per la cartina: anche il territorio cartina
+            // in obiettivo deve avere almeno 3 armate
+            for (String t : new ArrayList<>(miei)) {
+                if (!isInObiettivo(t, obj)) continue;
+                if (mappa.get(t).getArmate() > 2) continue; // già ok
 
-        List<String> daRinforzare = confine.stream()
-                .filter(t -> mappa.get(t).getArmate() < MINIMO_DIFESA_CONFINE)
-                .sorted(Comparator.comparingInt(t -> mappa.get(t).getArmate()))
-                .collect(Collectors.toList());
+                // È in nicchia? (tutti gli adiacenti sono miei)
+                boolean inNicchia = getConfinanti(t).stream()
+                        .allMatch(adj -> colore.equals(
+                                mappa.getOrDefault(adj, new TerritoryState("?",0)).getColore()));
+                if (inNicchia) continue; // in nicchia è al sicuro anche con 1-2 armate
 
-        for (String t : daRinforzare) {
+                // Porta ad almeno 3
+                if (rim > 0) {
+                    int diff = 3 - mappa.get(t).getArmate();
+                    int aggiunti = Math.min(diff, rim);
+                    mappa.get(t).setArmate(mappa.get(t).getArmate() + aggiunti);
+                    rim -= aggiunti;
+                } else {
+                    // Prendi da territorio interno con più armate
+                    miei.stream()
+                            .filter(s -> !s.equals(t) && mappa.get(s).getArmate() > 3)
+                            .filter(s -> getConfinanti(s).stream().allMatch(adj2 ->
+                                    colore.equals(mappa.getOrDefault(adj2, new TerritoryState("?",0)).getColore())))
+                            .max(Comparator.comparingInt(s -> mappa.get(s).getArmate()))
+                            .ifPresent(fonte -> {
+                                mappa.get(fonte).setArmate(mappa.get(fonte).getArmate() - 1);
+                                mappa.get(t).setArmate(mappa.get(t).getArmate() + 1);
+                                log.add("🔒 " + lbl(colore) + " protegge obiettivo " + nom(t) + " (mai 1-2 armate)");
+                            });
+                }
+            }
+        }
+        if (rim <= 0) { log.add("🛡 " + lbl(colore) + " piazza " + rinforzi + " armate"); return; }
+
+        // ── FASE 0e: territori in obiettivo con ≥6 punti MAI a 2 armate ───
+        // Un territorio in obiettivo da 6+ adiacenze a 2 armate è inaccettabile
+        // a qualsiasi turno — è troppo prezioso per lasciarlo indifeso.
+        // Fuori obiettivo: regola dopo turno 5.
+        {
+            String terrCartinaObjE = territoriCartina.getOrDefault(colore, null);
+            for (String t : new ArrayList<>(miei)) {
+                if (t.equals(terrCartinaObjE)) continue;
+                boolean inObj = isInObiettivo(t, obj);
+                int adj = getConfinanti(t).size();
+                // In obiettivo con ≥6 punti: regola assoluta (qualsiasi turno)
+                // Fuori obiettivo con ≥6 punti: solo dopo turno 5
+                if (adj < 6) continue;
+                if (!inObj && turno <= 5) continue;
+                if (mappa.get(t).getArmate() > 2) continue;
+                if (rim > 0) {
+                    mappa.get(t).setArmate(3);
+                    rim--;
+                } else {
+                    miei.stream()
+                            .filter(s -> !s.equals(t) && mappa.get(s).getArmate() > 3)
+                            .filter(s -> getConfinanti(s).stream().allMatch(adj2 ->
+                                    colore.equals(mappa.getOrDefault(adj2, new TerritoryState("?",0)).getColore())))
+                            .max(Comparator.comparingInt(s -> mappa.get(s).getArmate()))
+                            .ifPresent(fonte -> {
+                                mappa.get(fonte).setArmate(mappa.get(fonte).getArmate() - 1);
+                                mappa.get(t).setArmate(3);
+                                log.add("🔒 " + lbl(colore) + " protegge " + nom(t) +
+                                        (inObj ? " (obiettivo" : " (") + ", ≥6 punti, mai a 2)");
+                            });
+                }
+            }
+        }
+
+        // ── FASE 0e2: dopo il turno 5, max 1 territorio a 2 armate ─────────
+        if (turno > 5) {
+            String terrCartinaCorrenteE = territoriCartina.getOrDefault(colore, null);
+            for (String t : new ArrayList<>(miei)) {
+                if (t.equals(terrCartinaCorrenteE)) continue;
+                if (getConfinanti(t).size() < 6) continue; // solo ≥6 adiacenze
+                if (mappa.get(t).getArmate() > 2) continue; // già ok
+                if (rim > 0) {
+                    mappa.get(t).setArmate(3);
+                    rim--;
+                } else {
+                    // Prendi 1 armata da un territorio interno con più di 3
+                    miei.stream()
+                            .filter(s -> !s.equals(t) && mappa.get(s).getArmate() > 3)
+                            .filter(s -> getConfinanti(s).stream().allMatch(adj ->
+                                    colore.equals(mappa.getOrDefault(adj, new TerritoryState("?",0)).getColore())))
+                            .max(Comparator.comparingInt(s -> mappa.get(s).getArmate()))
+                            .ifPresent(fonte -> {
+                                mappa.get(fonte).setArmate(mappa.get(fonte).getArmate() - 1);
+                                mappa.get(t).setArmate(3);
+                                log.add("🔒 " + lbl(colore) + " protegge " + nom(t) +
+                                        " (≥6 punti, mai a 2)");
+                            });
+                }
+            }
+        }
+
+        // ── FASE 0e2: dopo il turno 5, max 1 territorio a 2 armate ─────────
+        if (turno > 5) {
+            String terrCartinaCorrente = territoriCartina.getOrDefault(colore, null);
+            List<String> territoriBassoDifesa = miei.stream()
+                    .filter(t -> mappa.get(t).getArmate() == 2)
+                    .filter(t -> !t.equals(terrCartinaCorrente)) // escludi territorio cartina
+                    .collect(Collectors.toList());
+
+            // Se ce n'è più di 1 a 2 armate, porta tutti tranne 1 a 3 armate
+            if (territoriBassoDifesa.size() > 1) {
+                // Lascia il primo (quello con meno minaccia), porta gli altri a 3
+                for (int ii = 1; ii < territoriBassoDifesa.size(); ii++) {
+                    String t = territoriBassoDifesa.get(ii);
+                    if (rim > 0) {
+                        mappa.get(t).setArmate(3);
+                        rim--;
+                    } else {
+                        // Prendi da territori interni con più armate
+                        Optional<String> interno = miei.stream()
+                                .filter(s -> !s.equals(t))
+                                .filter(s -> getConfinanti(s).stream().allMatch(adj ->
+                                        colore.equals(mappa.getOrDefault(adj, new TerritoryState("?",0)).getColore())))
+                                .filter(s -> mappa.get(s).getArmate() > 2)
+                                .max(Comparator.comparingInt(s -> mappa.get(s).getArmate()));
+                        if (interno.isPresent()) {
+                            mappa.get(interno.get()).setArmate(mappa.get(interno.get()).getArmate() - 1);
+                            mappa.get(t).setArmate(3);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── FASE 1 (difesa): porta ogni territorio ai minimi per tipo ──────
+        // Nei primi 7 turni: minimi ridotti (flessibilità iniziale)
+        // Territorio cartina (lasciato a 2): non toccare
+        // Fuori obiettivo: min 3-4 (T1-7), min 4-8 (T8+) — max 8
+        // In obiettivo: min 10-11, proporzionale al valore (adiacenze)
+        // Il budget difesa usa al massimo i 2/3 dei rinforzi disponibili.
+
+        String terrCartina = territoriCartina.getOrDefault(colore, null); // territorio a 2 per cartina
+        int budgetDifesa = Math.max(0, rim * 2 / 3);
+        boolean primiTurni = turno <= 7;
+
+        // Ordina: prima in obiettivo (più urgenti), poi fuori obiettivo
+        List<String> tuttiDaRinforzare = new ArrayList<>(confine);
+        tuttiDaRinforzare.addAll(miei.stream().filter(t -> !tuttiDaRinforzare.contains(t)).collect(Collectors.toList()));
+
+        for (String t : tuttiDaRinforzare) {
             if (budgetDifesa <= 0) break;
-            int attuale  = mappa.get(t).getArmate();
-            int mancanti = MINIMO_DIFESA_CONFINE - attuale;
-            int aggiunti = Math.min(mancanti, budgetDifesa);
-            if (aggiunti > 0) {
-                mappa.get(t).setArmate(attuale + aggiunti);
-                rim          -= aggiunti;
-                budgetDifesa -= aggiunti;
-                log.add("🔒 " + lbl(colore) + " difende " + nom(t) +
-                        " (" + attuale + "→" + (attuale + aggiunti) + ")");
+            if (t.equals(terrCartina)) continue; // non toccare il territorio cartina
+
+            int attuale = mappa.get(t).getArmate();
+
+            // Peso del nemico più forte adiacente → difesa proporzionale alla sua dominanza
+            int pesoNemicoAdj = getConfinanti(t).stream()
+                    .filter(adj -> {
+                        TerritoryState st = mappa.getOrDefault(adj, new TerritoryState("?",0));
+                        return !colore.equals(st.getColore()) && !"?".equals(st.getColore());
+                    })
+                    .mapToInt(adj -> calcolaPesoAvversario(mappa.get(adj).getColore(), mappa))
+                    .max().orElse(0);
+            // bonus: +2 se peso>11, +3 se >15, +4 se >20
+            int bonusPeso = pesoNemicoAdj > 20 ? 4 : pesoNemicoAdj > 15 ? 3 : pesoNemicoAdj > 11 ? 2 : 0;
+
+            int minimo;
+            if (isInObiettivo(t, obj)) {
+                int adiacenze = getConfinanti(t).size();
+                int minimoBase = switch (adiacenze) {
+                    case 1, 2, 3 -> 8;
+                    case 4       -> 10;
+                    case 5       -> 12;
+                    case 6       -> 14;
+                    default      -> 16;
+                };
+                minimo = primiTurni ? Math.max(4, minimoBase / 2) : minimoBase + bonusPeso;
+            } else {
+                minimo = primiTurni ? 3 : 4 + bonusPeso;
+            }
+
+            if (attuale < minimo) {
+                int mancanti = minimo - attuale;
+                int aggiunti = Math.min(mancanti, budgetDifesa);
+                if (aggiunti > 0) {
+                    mappa.get(t).setArmate(attuale + aggiunti);
+                    rim          -= aggiunti;
+                    budgetDifesa -= aggiunti;
+                    log.add("🔒 " + lbl(colore) + " difende " + nom(t) +
+                            " (" + attuale + "→" + (attuale + aggiunti) + ")");
+                }
+            }
+
+            // Cap fuori obiettivo: max 8 armate
+            if (!isInObiettivo(t, obj) && !t.equals(terrCartina)) {
+                int att = mappa.get(t).getArmate();
+                if (att > 8) {
+                    int eccesso = att - 8;
+                    mappa.get(t).setArmate(8);
+                    rim += eccesso; // restituisce al budget
+                }
             }
         }
         if (rim <= 0) { log.add("🛡 " + lbl(colore) + " piazza " + rinforzi + " armate"); return; }
@@ -833,12 +1353,108 @@ public class AIPlayerService {
             ord.addAll(fuoriObiettivo);
         }
 
-        // Concentra sul territorio prioritario, rispettando il cap di 25 armate.
-        // Nessun territorio può superare 25 carri — inutile accumulare di più.
-        final int CAP_ARMATE_TERRITORIO = 30;
-        String principale = ord.get(0);
+        // ── CAP 20 ARMATE: oltre 20 solo se pressione nemica ≥ 2x ────────────
+        // Se il territorio principale ha già ≥ 20 armate, aggiunge rinforzi
+        // solo se la somma delle armate nemiche adiacenti ≥ 2x le sue armate.
+        // In quel caso aggiunge finché non raggiunge di nuovo la soglia sicura.
+        // Altrimenti scende al territorio successivo in lista.
+        // Cap standard: 35 armate per territorio.
+        // Eccezioni: si può superare solo se:
+        // A) Non c'è altro posto dove mettere i rinforzi (tutti gli altri al cap)
+        // B) Si vuole attaccare un territorio con >20 armate (serve forza superiore)
+        final int CAP_ARMATE_TERRITORIO = 35;
+        final int SOGLIA_DIFESA_STANDARD = 20;
+
+        // Salta il principale se ha ≥ 20 armate e non è sotto pressione
+        if (!ord.isEmpty()) {
+            String cand = ord.get(0);
+            int armCand = mappa.get(cand).getArmate();
+            if (armCand >= SOGLIA_DIFESA_STANDARD) {
+                int pressioneNemica = getConfinanti(cand).stream()
+                        .filter(adj -> {
+                            TerritoryState st = mappa.getOrDefault(adj, new TerritoryState("?",0));
+                            return !colore.equals(st.getColore()) && !"?".equals(st.getColore());
+                        })
+                        .mapToInt(adj -> mappa.get(adj).getArmate())
+                        .sum();
+                if (pressioneNemica < armCand * 2) {
+                    // Non è sotto pressione: scendi al prossimo in lista
+                    ord = new ArrayList<>(ord.size() > 1 ? ord.subList(1, ord.size()) : ord);
+                }
+                // Se è sotto pressione (pressioneNemica >= 2x): continua ad aggiungere
+                // finché non raggiunge pressioneNemica / 2 (la soglia sicura)
+            }
+        }
+
+        // ── PRIMA di concentrare: distribuisci a tutti gli obiettivi ───────
+        // Porta tutti gli obiettivi al minimo, rispettando il cap per adiacenze.
+        for (String t : ord) {
+            if (rim <= 0) break;
+            if (!isInObiettivo(t, obj)) continue;
+            int attualeT = mappa.get(t).getArmate();
+            int adjT = getConfinanti(t).size();
+            // Cap per adiacenze: mai superare questo valore
+            int capT = adjT <= 3 ? 12 : adjT <= 5 ? 20 : 25;
+            int minimoObjT = turno >= 35 ? (adjT >= 6 ? 14 : adjT >= 4 ? 10 : 8) : 3;
+            minimoObjT = Math.min(minimoObjT, capT); // minimo non può superare il cap
+            boolean inNicchiaT = getConfinanti(t).stream().allMatch(adj ->
+                    colore.equals(mappa.getOrDefault(adj, new TerritoryState("?",0)).getColore()));
+            // Nicchia con ≥5 adj in obiettivo: mantieni almeno 3 comunque
+            if (inNicchiaT && adjT < 5) continue;
+            // In nicchia ma ≥5 adj: mantieni minimo proporzionale al valore
+            if (inNicchiaT && adjT >= 6) minimoObjT = Math.max(10, minimoObjT);
+            else if (inNicchiaT && adjT >= 5) minimoObjT = Math.max(8, minimoObjT);
+            if (attualeT < minimoObjT) {
+                int aggiunti = Math.min(minimoObjT - attualeT, rim);
+                mappa.get(t).setArmate(attualeT + aggiunti);
+                rim -= aggiunti;
+            }
+        }
+        if (rim <= 0) { log.add("🛡 " + lbl(colore) + " piazza " + rinforzi + " armate"); return; }
+
+        String principale = ord.isEmpty() ? null : ord.get(0);
+        if (principale == null) {
+            log.add("🛡 " + lbl(colore) + " piazza " + rinforzi + " armate");
+            return;
+        }
         int attualePrincipale = mappa.get(principale).getArmate();
-        int spazioDisponibile = Math.max(0, CAP_ARMATE_TERRITORIO - attualePrincipale);
+
+        // Cap per territorio basato sul suo valore (adiacenze = punti):
+        // ≤3 adiacenze → max 12 (basso valore: Venezuela, Argentina...)
+        // 4-5 adiacenze → max 20 (medio valore)
+        // 6+ adiacenze → cap standard 35 (alto valore strategico)
+        int adjPrincipale = getConfinanti(principale).size();
+        // Cap ASSOLUTO per valore territorio — mai superare indipendentemente dall'attacco
+        // 3 adj (Indonesia, Argentina): max 12
+        // 4-5 adj (India, Brasile): max 20
+        // 6+ adj (Cina, Africa del Nord): max 25
+        int capPerValore = adjPrincipale <= 3 ? 12 : adjPrincipale <= 5 ? 20 : 25;
+
+        // Eccezione: se il territorio adiacente ha >20 carri → accumulo illimitato
+        boolean vuoleAttaccareFortemente = getConfinanti(principale).stream()
+                .anyMatch(adj -> {
+                    TerritoryState st = mappa.getOrDefault(adj, new TerritoryState("?",0));
+                    return !colore.equals(st.getColore()) && st.getArmate() > 20;
+                });
+
+        // Cap effettivo: usa sempre il cap per valore come massimo assoluto
+        // vuoleAttaccareFortemente alza il cap MA solo fino al massimo del CAP_ARMATE_TERRITORIO
+        int capEffettivo;
+        if (vuoleAttaccareFortemente) {
+            int armateTarget = getConfinanti(principale).stream()
+                    .filter(adj -> {
+                        TerritoryState st = mappa.getOrDefault(adj, new TerritoryState("?",0));
+                        return !colore.equals(st.getColore()) && st.getArmate() > 20;
+                    })
+                    .mapToInt(adj -> mappa.get(adj).getArmate())
+                    .max().orElse(20);
+            // Max = min(bersaglio + 10, 35) — mai illimitato
+            capEffettivo = Math.min(armateTarget + 10, CAP_ARMATE_TERRITORIO);
+        } else {
+            capEffettivo = capPerValore; // cap stretto per territori a basso valore
+        }
+
+        int spazioDisponibile = Math.max(0, capEffettivo - attualePrincipale);
         int daAggiungere = Math.min(rim, spazioDisponibile);
         if (daAggiungere > 0) {
             mappa.get(principale).setArmate(attualePrincipale + daAggiungere);
@@ -961,7 +1577,12 @@ public class AIPlayerService {
                 maxAttacchi = 10; moltiplicatoreSoglia = 1.5;
             } else if (nTerr >= 12) {
                 maxAttacchi = 1;  moltiplicatoreSoglia = 3.5;
-            } else if (nTerr >= 10) {
+            } else if (nTerr == 10) {
+                // SOGLIA CRITICA (10t): perdere 1 = scendere a 9 (rinforzi ai minimi)
+                // Attacca solo se opportunità eccezionale, mai a rischio
+                maxAttacchi = 1;  moltiplicatoreSoglia = 4.0;
+            } else if (nTerr == 11) {
+                // Zona confortevole: attacca con cautela
                 maxAttacchi = 2;  moltiplicatoreSoglia = 3.0;
             } else if (endgame && sonoIndietro) {
                 maxAttacchi = 3;  moltiplicatoreSoglia = 2.0;
@@ -979,29 +1600,46 @@ public class AIPlayerService {
             }
         } // fine if turno >= 35 / else
 
-        // ── ATTACCO FORZATO: ratio 4.5x-4.8x su territorio in obiettivo ────────
-        // Se un territorio del giocatore ha tra 4.5 e 4.8 volte le armate
-        // di un territorio adiacente in obiettivo, DEVE attaccarlo.
-        // Questa opportunità non può essere ignorata indipendentemente dalla strategia.
-        {
+        // META-PRIORITÀ: urgenza sdadata abbassa la soglia di attacco
+        // Va applicata DOPO l'inizializzazione di moltiplicatoreSoglia e maxAttacchi
+        if (turno < 35) {
+            int urgenzaSdadata = calcolaUrgenzaSdadata(colore, obiettivoId, mappa, turno);
+            if (urgenzaSdadata > 200) {
+                moltiplicatoreSoglia = Math.max(1.5, moltiplicatoreSoglia - 0.5);
+                maxAttacchi = Math.min(maxAttacchi + 1, 5);
+            }
+        }
+
+        // ── ATTACCO CARTA: conquista facile per prendere la carta del turno ──
+        // Se non ho ancora conquistato nessun territorio questo turno (niente carta),
+        // cerco un bersaglio probabilisticamente facile (ratio ≥ 5x, difensore ≤ 4)
+        // e lo conquisto solo per assicurarmi la carta.
+        // La carta vale sempre: anche senza obiettivi vicini, 1 conquista facile = carta.
+        // NON attacco se ho già conquistato (carta già garantita).
+        if (territorConquistatiNelTurno.getOrDefault(colore, 0) == 0) {
             List<String> mieiOra = getTerritoriGiocatore(colore, mappa);
-            outer:
+            AttaccoCandidate targhetFacile = null;
+            double bestRatio = 0;
+
             for (String mio : mieiOra) {
                 int mieArmate = mappa.get(mio).getArmate();
                 for (String nemico : getConfinanti(mio)) {
                     TerritoryState st = mappa.get(nemico);
                     if (st == null || colore.equals(st.getColore())) continue;
-                    if (!isInObiettivo(nemico, obj)) continue;
                     int armNem = st.getArmate();
-                    if (armNem == 0) continue;
+                    if (armNem == 0 || armNem > 4) continue; // difensore max 4 armate
                     double ratio = (double) mieArmate / armNem;
-                    if (ratio >= 4.5 && ratio <= 4.8) {
-                        log.add("💥 " + lbl(colore) + " attacco forzato su " + nom(nemico)
-                                + " (ratio " + String.format("%.1f", ratio) + "x)");
-                        eseguiAttacco(new AttaccoCandidate(mio, nemico, 9999), mappa, log, colore);
-                        break outer;
+                    if (ratio >= 5.0 && ratio > bestRatio) { // conquista quasi certa (>95%)
+                        bestRatio = ratio;
+                        targhetFacile = new AttaccoCandidate(mio, nemico, 9999);
                     }
                 }
+            }
+
+            if (targhetFacile != null) {
+                log.add("🃏 " + lbl(colore) + " attacca " + nom(targhetFacile.verso())
+                        + " per prendere carta (" + String.format("%.1f", bestRatio) + "x)");
+                eseguiAttacco(targhetFacile, mappa, log, colore);
             }
         }
 
@@ -1116,8 +1754,33 @@ public class AIPlayerService {
 
         if (isInObiettivo(territorio, obj)) {
             p += bonusObiettivo;
-            p += getConfinanti(territorio).size() * 20;
+            // Valore proporzionale alle adiacenze (= punti del territorio)
+            int adjCount = getConfinanti(territorio).size();
+            p += adjCount * 25;
+            // Meta-urgenza sdadata: se la situazione è critica, +urgenza su obiettivi
+            int obIdPerUrgenza = RisikoBoardData.OBIETTIVI.entrySet().stream()
+                    .filter(e -> e.getValue() == obj).map(Map.Entry::getKey).findFirst().orElse(0);
+            p += calcolaUrgenzaSdadata(colore, obIdPerUrgenza, mappa, turno) / 2;
             if (TERRITORI_STRATEGICI.contains(territorio)) p += 80;
+
+            // ── BONUS ESCLUSIVITÀ: territorio in obiettivo che gli altri non hanno ──
+            // Se nessun avversario ha questo territorio nel suo obiettivo stimato,
+            // è "esclusivo" → insistere nell'attaccarlo perché nessuno lo difenderà
+            // per ragioni proprie. Bonus proporzionale all'esclusività.
+            boolean altriLoVogliono = mappa.values().stream()
+                    .map(TerritoryState::getColore)
+                    .filter(c -> !c.equals(colore) && !"?".equals(c))
+                    .distinct()
+                    .anyMatch(avversario -> {
+                        int obAvv = inferencer.getObiettivoPiuProbabile(avversario);
+                        RisikoBoardData.ObiettivoTarget objAvv = RisikoBoardData.OBIETTIVI.get(obAvv);
+                        return objAvv != null && isInObiettivo(territorio, objAvv);
+                    });
+            if (!altriLoVogliono) {
+                // Territorio esclusivo: nessun altro lo vuole → priorità alta
+                // Il bot deve insistere su questi anche se il successo è simile ad altri
+                p += 200; // bonus esclusività
+            }
             for (int i = 0; i < ORDINE_CONTINENTI.size(); i++) {
                 String cont = ORDINE_CONTINENTI.get(i);
                 List<String> terrCont = RisikoBoardData.CONTINENTI.getOrDefault(cont, List.of());
@@ -1167,6 +1830,50 @@ public class AIPlayerService {
 
         // ── PRIORITÀ 4: territorio strategico (fuori obiettivo) ─────────────
         if (!isInObiettivo(territorio, obj) && TERRITORI_STRATEGICI.contains(territorio)) p += 40;
+
+        // ── PRIORITÀ 0 ASSOLUTA (T1-33): chiudi continente mancante di 1 ───
+        // Priorità massima di tutto il gioco fino al turno 33:
+        // Se manca 1 solo territorio per chiudere un continente,
+        // l'attaccante ha almeno il doppio delle armate del difensore,
+        // E il totale delle armate attaccanti è ≥ 12 → bonus altissimo.
+        if (turno <= 33) {
+            for (Map.Entry<String, List<String>> ce : RisikoBoardData.CONTINENTI.entrySet()) {
+                List<String> tc = ce.getValue();
+                if (!tc.contains(territorio)) continue;
+
+                // Quanti ne ho già in questo continente?
+                long mieiInCont = tc.stream()
+                        .filter(t -> colore.equals(
+                                mappa.getOrDefault(t, new TerritoryState("?",0)).getColore()))
+                        .count();
+
+                // Manca solo questo territorio per completare il continente
+                if (mieiInCont == tc.size() - 1) {
+                    // Trova il territorio attaccante con più armate adiacente
+                    int maxMieArmate = getConfinanti(territorio).stream()
+                            .filter(adj -> colore.equals(
+                                    mappa.getOrDefault(adj, new TerritoryState("?",0)).getColore()))
+                            .mapToInt(adj -> mappa.get(adj).getArmate())
+                            .max().orElse(0);
+
+                    // Condizioni: almeno 2x il difensore E almeno 12 armate totali attaccanti
+                    if (maxMieArmate >= armateNemico * 2 && maxMieArmate >= 12) {
+                        // Bonus proporzionale al valore del continente
+                        int valoreCont = switch (ce.getKey()) {
+                            case "asia"        -> 7;
+                            case "nordamerica" -> 5;
+                            case "europa"      -> 5;
+                            case "africa"      -> 3;
+                            case "sudamerica"  -> 2;
+                            case "oceania"     -> 2;
+                            default            -> 1;
+                        };
+                        p += 800 + valoreCont * 50; // Asia=1150, NA/EU=1050, Africa=950, SA/OC=900
+                    }
+                    break;
+                }
+            }
+        }
 
         // ── PRIORITÀ 5b: completa continente mancante di 1 territorio ─────
         // Se il bot possiede tutti i territori di un continente tranne 1,
@@ -1247,23 +1954,19 @@ public class AIPlayerService {
                 .filter(st -> st.getColore().equals(coloreNemico))
                 .count();
 
-        // A) Dominanza numerica
-        if (territoriNemico >= 12) {
-            p += (int)(territoriNemico - 11) * 60;
+        // Peso effettivo del nemico: territori reali + bonus continente
+        // (Oceania/SA/Africa=+5, NA/EU/Asia=+10)
+        int pesoNemico = calcolaPesoAvversario(coloreNemico, mappa);
+
+        // Priorità di attacco proporzionale al peso (>11 = minaccia crescente)
+        if (pesoNemico > 11) {
+            p += (pesoNemico - 11) * 60; // +60 per ogni "territorio equivalente" oltre 11
         }
 
-        // B) Controlla continente ad alto valore (Nord America +5, Asia +7, Europa +5)
-        List<String> continentiAltoValore = List.of("nordamerica", "asia", "europa");
-        for (String cont : continentiAltoValore) {
-            List<String> tc = RisikoBoardData.CONTINENTI.getOrDefault(cont, List.of());
-            boolean controllaContNemico = tc.stream()
-                    .allMatch(terr -> coloreNemico.equals(
-                            mappa.getOrDefault(terr, new TerritoryState("?", 0)).getColore()));
-            if (controllaContNemico) {
-                p += 500;
-                break; // un solo bonus anche se controlla più continenti
-            }
-        }
+        // Difesa proporzionale: più il nemico è forte, più vale attaccarlo
+        // per indebolirlo (coalizione implicita di tutti vs dominante)
+        if (pesoNemico >= 20) p += 200; // molto dominante → urgenza alta
+        else if (pesoNemico >= 15) p += 100; // moderatamente dominante
 
         // Malus: armate difensore (rischioso attaccare posizioni forti)
         p -= armateNemico * 3;
@@ -1429,12 +2132,25 @@ public class AIPlayerService {
         return false;
     }
 
-    private void eseguiSpostamento(String colore, int obiettivoId,
+    private void eseguiSpostamento(String colore, int obiettivoId, int turno,
                                    Map<String, TerritoryState> mappa, List<String> log) {
+        // REGOLA: se ha già fatto uno spostamento per cartina questo turno, non ne fa un altro
+        if (territoriCartina.containsKey(colore + "_spostato")) return;
+
+        // REGOLA: giocatori con >11 territori O con continente non lasciano mai 2 armate
+        // in nessun territorio durante lo spostamento
+        List<String> mieiCheck = getTerritoriGiocatore(colore, mappa);
+        boolean sonoDominanteSposta = mieiCheck.size() > 11
+                || RisikoBoardData.CONTINENTI.values().stream()
+                .anyMatch(tc -> mieiCheck.containsAll(tc));
+
         ObiettivoTarget obj = RisikoBoardData.OBIETTIVI.get(obiettivoId);
         List<String> miei = getTerritoriGiocatore(colore, mappa);
         List<String> confine = getTerritoriBordoNemico(colore, miei, mappa);
         if (confine.isEmpty()) return;
+
+        // Territorio appena conquistato via cartina: non può essere fonte di spostamento
+        String terrCartinaConquistato = territoriCartina.getOrDefault(colore + "_conquistato", null);
 
         // Trova territorio interno adiacente a un confine con molte armate da spostare
         for (String frontiera : confine) {
@@ -1443,27 +2159,51 @@ public class AIPlayerService {
                     .filter(t -> colore.equals(mappa.getOrDefault(t,
                             new TerritoryState("?", 0)).getColore()))
                     .filter(t -> !confine.contains(t)) // è interno
+                    .filter(t -> !t.equals(terrCartinaConquistato)) // non è il territorio cartina
                     .filter(t -> mappa.get(t).getArmate() > MIN_ARMATE_DIFESA + 1)
                     .max(Comparator.comparingInt(t -> mappa.get(t).getArmate()));
 
             if (interno.isEmpty()) continue;
 
             String fonte = interno.get();
-            int qty = mappa.get(fonte).getArmate() - MIN_ARMATE_DIFESA;
+
+            // Verifica esplicita adiacenza (regola: solo tra territori adiacenti)
+            if (!getConfinanti(fonte).contains(frontiera)) continue;
+
+            // In sdadata (T35+): non lasciare mai 2 armate nella fonte,
+            // a meno che il totale (fonte + frontiera) sia ≤ 7.
+            // In quel caso si possono lasciare anche solo 1-2 armate.
+            // Fuori sdadata: lascia 1 armata (regola standard).
+            int armFonte = mappa.get(fonte).getArmate();
+            int armFrontiera = mappa.get(frontiera).getArmate();
+            int totale = armFonte + armFrontiera;
+
+            int minimoNellaFonte;
+            if (turno >= 35) {
+                // Sdadata: lascia almeno 3 in origine (mai 2), salvo totale ≤ 7
+                minimoNellaFonte = (totale <= 7) ? 1 : 3;
+            } else if (sonoDominanteSposta) {
+                // Dominante (>11t o continente): mai lasciare 2 armate — minimo 3
+                minimoNellaFonte = 3;
+            } else {
+                minimoNellaFonte = 1; // regola standard
+            }
+
+            int qty = armFonte - minimoNellaFonte;
             if (qty <= 0) continue;
 
-            // Sposta solo verso frontiera in obiettivo o strategica
+            // Sposta solo verso frontiera utile: in obiettivo, strategica o blocca continente
             boolean valePena = isInObiettivo(frontiera, obj)
                     || TERRITORI_STRATEGICI.contains(frontiera)
                     || staBlocandoContinente(frontiera, null, mappa);
 
             if (!valePena) continue;
 
-            mappa.get(fonte).setArmate(MIN_ARMATE_DIFESA);
+            mappa.get(fonte).setArmate(1); // lascia 1 armata
             mappa.get(frontiera).setArmate(mappa.get(frontiera).getArmate() + qty);
-            log.add("🚀 " + lbl(colore) + " sposta " + qty + " da " +
+            log.add("🚀 " + lbl(colore) + " sposta " + qty + " armate da " +
                     nom(fonte) + " → " + nom(frontiera));
-            break; // Un solo spostamento per turno
+            break; // REGOLA: 1 solo spostamento per turno, tra territori adiacenti
         }
     }
 
@@ -1478,64 +2218,167 @@ public class AIPlayerService {
      * 3. Decide se offrirne una propria
      * 4. Ricambia se è in accordo attivo
      */
-    private void gestisciCartina(String colore, int obiettivoId,
+    private void gestisciCartina(String colore, int obiettivoId, int turno,
                                  Map<String, TerritoryState> mappa, List<String> log) {
+        // REGOLA: dal turno 33 in poi nessuno può aprire NÉ mantenere cartine
+        if (turno >= 33) {
+            // Chiudi tutti gli accordi attivi per questo giocatore
+            String partner = accordiCartina.remove(colore);
+            if (partner != null) {
+                accordiCartina.remove(partner); // rimuovi anche il lato opposto
+                log.add("🤝 " + lbl(colore) + " chiude accordo cartina (turno 33+)");
+            }
+            territoriCartina.remove(colore);
+            territoriCartina.remove(colore + "_spostato");
+            return;
+        }
+
         ObiettivoTarget obj = RisikoBoardData.OBIETTIVI.get(obiettivoId);
         List<String> miei = getTerritoriGiocatore(colore, mappa);
         List<Carta> mano = maniCarte.getOrDefault(colore, new ArrayList<>());
 
         int punteggioMio = calcolaPunteggioAttuale(colore, obiettivoId, mappa);
-        int punteggioMax = getMassimoPunteggioAvversari(colore, mappa);
         boolean hoBisognoDiCarte = mano.size() < 3;
-        boolean sonoLontanoDaObiettivo = punteggioMio < 40; // meno della metà di 86
+        boolean sonoLontanoDaObiettivo = punteggioMio < 40;
+
+        // ── AGGIORNA CONTATORE TERRITORI SCOPERTI ────────────────────────────
+        mappa.forEach((terr, st) -> {
+            if (!colore.equals(st.getColore()) && st.getArmate() == 2) {
+                boolean adj = getConfinanti(terr).stream()
+                        .anyMatch(a -> colore.equals(mappa.getOrDefault(a, new TerritoryState("?",0)).getColore()));
+                if (adj) turniTerritorioScoperto.merge(terr, 1, Integer::sum);
+            }
+        });
+        turniTerritorioScoperto.entrySet().removeIf(e -> {
+            TerritoryState st = mappa.get(e.getKey());
+            return st == null || st.getArmate() != 2;
+        });
 
         // ── RILEVA E ACCETTA/RIFIUTA CARTINA OFFERTA ─────────────────────────
-
         String cartinaTrovata = rilevaCarthina(colore, miei, mappa, obj);
         if (cartinaTrovata != null) {
             String partner = mappa.get(cartinaTrovata).getColore();
-            boolean accetta = deveAccettareCartina(colore, partner, mano, mappa,
-                    hoBisognoDiCarte, sonoLontanoDaObiettivo);
-            if (accetta) {
-                accettaCartina(colore, cartinaTrovata, partner, obiettivoId, mappa, log);
+            int turniScoperto = turniTerritorioScoperto.getOrDefault(cartinaTrovata, 0);
+            if (turniScoperto > 3) {
+                // Territorio scoperto da >3 turni: cartina scaduta, posso conquistare
+                log.add("⚔️ " + lbl(colore) + " può conquistare (cartina scaduta dopo " + turniScoperto + " turni)");
             } else {
-                log.add("🤝 " + lbl(colore) + " rifiuta cartina di " + lbl(partner));
+                boolean accetta = deveAccettareCartina(colore, partner, mano, mappa,
+                        hoBisognoDiCarte, sonoLontanoDaObiettivo);
+                if (accetta) {
+                    accettaCartina(colore, cartinaTrovata, partner, obiettivoId, mappa, log);
+                } else {
+                    log.add("🤝 " + lbl(colore) + " rifiuta cartina di " + lbl(partner));
+                }
             }
         }
 
-        // ── OFFRI CARTINA SE STRATEGICAMENTE UTILE ───────────────────────────
-        // REGOLA: non apre mai cartina se ci sono territori nemici adiacenti
-        // con 1 o 2 armate — quei territori sono bersagli facili da conquistare
-        // direttamente (pesca carta gratis senza accordo).
-        boolean esistonoBersagliAdjDeboli = miei.stream()
-                .flatMap(t -> getConfinanti(t).stream())
-                .distinct()
-                .anyMatch(adj -> {
-                    TerritoryState st = mappa.get(adj);
-                    return st != null
-                            && !colore.equals(st.getColore())
-                            && st.getArmate() <= 2;
-                });
+        // ── SE HO OFFERTO CARTINA E L'ALTRO RIFIUTA → DEVO RICOPRIRE ────────
+        if (territoriCartina.containsKey(colore)) {
+            String terrMio = territoriCartina.get(colore);
+            TerritoryState st = mappa.get(terrMio);
+            int turnoOfferta = turnoOffertaCartina.getOrDefault(colore, turno);
+            if (st != null && colore.equals(st.getColore()) && st.getArmate() == 2
+                    && turno - turnoOfferta >= 2) {
+                int maxNem = getConfinanti(terrMio).stream()
+                        .filter(adj -> !colore.equals(mappa.getOrDefault(adj, new TerritoryState("?",0)).getColore()))
+                        .mapToInt(adj -> mappa.get(adj).getArmate()).max().orElse(0);
+                int minimo = Math.max(6, maxNem * 2);
+                for (String t : new ArrayList<>(miei)) {
+                    if (t.equals(terrMio)) continue;
+                    TerritoryState fonte = mappa.get(t);
+                    if (fonte == null || fonte.getArmate() <= MIN_ARMATE_DIFESA) continue;
+                    boolean interno = getConfinanti(t).stream().allMatch(a ->
+                            colore.equals(mappa.getOrDefault(a, new TerritoryState("?",0)).getColore()));
+                    if (!interno) continue;
+                    int sposta = Math.min(fonte.getArmate() - MIN_ARMATE_DIFESA, minimo - st.getArmate());
+                    if (sposta > 0) {
+                        fonte.setArmate(fonte.getArmate() - sposta);
+                        st.setArmate(st.getArmate() + sposta);
+                        log.add("🔒 " + lbl(colore) + " ricopre territorio cartina " + nom(terrMio) + " → " + st.getArmate() + " armate");
+                        territoriCartina.put(colore + "_spostato", terrMio); // conta come spostamento
+                        break;
+                    }
+                }
+                territoriCartina.remove(colore);
+                accordiCartina.remove(colore);
+            }
+        }
 
-        if (hoBisognoDiCarte && sonoLontanoDaObiettivo
+        // ── REGOLA: annulla accordo se il partner ha >11 territori ─────────────
+        // Non si lascia mai un territorio a 2 armate a chi è troppo forte.
+        String partnerAttivo = accordiCartina.get(colore);
+        if (partnerAttivo != null) {
+            List<String> lorTerr = getTerritoriGiocatore(partnerAttivo, mappa);
+            if (lorTerr.size() > 11) {
+                accordiCartina.remove(colore);
+                accordiCartina.remove(partnerAttivo);
+                territoriCartina.remove(colore);
+                log.add("🤝 " + lbl(colore) + " annulla accordo con " + lbl(partnerAttivo) + " (troppo forte)");
+            }
+        }
+
+        // ── OFFRI CARTINA ─────────────────────────────────────────────────────
+        // Probabilità base: 5% per turno.
+        // ECCEZIONE: se 1-2 giocatori hanno >11 territori O un continente,
+        // gli altri (2-3) si coalizzano via cartina → probabilità più alta (60%)
+        // e in quel caso è l'UNICO caso dove la cartina può essere in 3 giocatori.
+
+        boolean esistonoBersagliDeboli = miei.stream()
+                .flatMap(t -> getConfinanti(t).stream()).distinct()
+                .anyMatch(adj -> { TerritoryState st = mappa.get(adj);
+                    return st != null && !colore.equals(st.getColore()) && st.getArmate() <= 2; });
+
+        // Calcola giocatori dominanti
+        List<String> dominanti = mappa.values().stream()
+                .map(TerritoryState::getColore)
+                .filter(c -> !c.equals(colore) && !"?".equals(c))
+                .distinct()
+                .filter(c -> {
+                    List<String> loro = getTerritoriGiocatore(c, mappa);
+                    if (loro.size() > 11) return true;
+                    return RisikoBoardData.CONTINENTI.values().stream()
+                            .anyMatch(loro::containsAll);
+                })
+                .collect(Collectors.toList());
+
+        boolean coelizioneAttiva = !dominanti.isEmpty() && dominanti.size() <= 2;
+        double probabilitaCartina = coelizioneAttiva ? 0.60 : 0.05;
+
+        // In coalizione, si può fare cartina anche in 3 (unico caso ammesso)
+        // I giocatori dominanti non aprono mai cartina
+        boolean sonoDominante = getTerritoriGiocatore(colore, mappa).size() > 11
+                || RisikoBoardData.CONTINENTI.values().stream()
+                .anyMatch(tc -> getTerritoriGiocatore(colore, mappa).containsAll(tc));
+
+        // Non si può mai aprire cartina con solo 9 territori
+        boolean hoSoloNoveTerr = getTerritoriGiocatore(colore, mappa).size() <= 9;
+
+        boolean possoFareCartina = !sonoDominante
+                && !hoSoloNoveTerr
                 && !accordiCartina.containsKey(colore)
-                && !esistonoBersagliAdjDeboli) {
-            offriCartina(colore, obiettivoId, miei, mappa, log);
+                && !esistonoBersagliDeboli
+                && hoBisognoDiCarte
+                && sonoLontanoDaObiettivo
+                && RND.nextDouble() < probabilitaCartina;
+
+        // Limite 2 cartine totali — ma in coalizione si può arrivare a 3 accordi
+        long accordiAttivi = accordiCartina.size() / 2;
+        boolean limiteOk = coelizioneAttiva ? accordiAttivi < 3 : accordiAttivi < 2;
+
+        if (possoFareCartina && limiteOk) {
+            offriCartina(colore, obiettivoId, miei, mappa, log, turno);
         }
 
         // ── RICAMBIA CARTINA SE IN ACCORDO ATTIVO ────────────────────────────
-
         if (accordiCartina.containsKey(colore)) {
             ricambiaCartina(colore, obiettivoId, miei, mappa, log);
         }
 
         // ── ROMPI ACCORDO SE NON SERVE PIÙ ───────────────────────────────────
-
         if (!hoBisognoDiCarte && mano.size() >= 3) {
             String partner = accordiCartina.remove(colore);
-            if (partner != null) {
-                log.add("🤝 " + lbl(colore) + " interrompe accordo con " + lbl(partner));
-            }
+            if (partner != null) log.add("🤝 " + lbl(colore) + " interrompe accordo con " + lbl(partner));
         }
     }
 
@@ -1580,19 +2423,23 @@ public class AIPlayerService {
                                          boolean sonoLontanoDaObiettivo) {
         // Rifiuta se ho già abbastanza carte
         if (!hoBisognoDiCarte) return false;
-
         // Rifiuta se non sono lontano dall'obiettivo
         if (!sonoLontanoDaObiettivo) return false;
 
-        // Accetta preferibilmente con giocatore debole
         List<String> lorTerritori = getTerritoriGiocatore(partner, mappa);
-        if (lorTerritori.size() > 15) return false; // troppo forte, rischioso
 
-        // Accetta se il partner non ha un continente (meno pericoloso)
+        // ── MOTIVI DI RIFIUTO (regole esplicite) ────────────────────────────
+        // 1. Il partner ha punteggio più alto in obiettivo (è più avanti di me)
+        //    → non conviene aiutarlo con una carta gratuita
+        // 2. Il partner ha più di 11 territori → troppo forte, evita di rafforzarlo
+        // 3. Il partner controlla un continente → già abbastanza vantaggi
+        if (lorTerritori.size() > 11) return false;
+
         boolean haContinente = RisikoBoardData.CONTINENTI.values().stream()
-                .anyMatch(terrCont -> lorTerritori.containsAll(terrCont));
+                .anyMatch(lorTerritori::containsAll);
+        if (haContinente) return false;
 
-        return !haContinente || lorTerritori.size() < 12;
+        return true; // accetta: il partner è nella norma
     }
 
     /**
@@ -1627,10 +2474,19 @@ public class AIPlayerService {
         log.add("🤝 " + lbl(colore) + " accetta cartina da " + lbl(partner) +
                 " → conquista " + nom(territorio) + " (lascia " + MIN_ARMATE_DIFESA + ")");
         eventiCartinaTurno.add(new EventoCartina(partner, colore, territorio));
+        territoriCartina.put(colore + "_spostato", territorio); // conta come spostamento del turno
 
-        // Registra accordo
-        accordiCartina.put(colore, partner);
-        territoriCartina.put(colore, territorio);
+        // Registra accordo bidirezionale (A→B e B→A)
+        // Solo se non supera il limite di 2 cartine attive
+        long accordiAttivi = accordiCartina.size() / 2;
+        if (accordiAttivi < 2) {
+            accordiCartina.put(colore, partner);
+            accordiCartina.put(partner, colore); // bidirezionale
+            territoriCartina.put(colore, territorio);
+            // Marca il territorio come "conquistato via cartina" per bloccare lo spostamento
+            // verso destinazioni diverse — le armate devono restare lì
+            territoriCartina.put(colore + "_conquistato", territorio);
+        }
     }
 
     /**
@@ -1638,23 +2494,59 @@ public class AIPlayerService {
      * fuori obiettivo adiacente al partner preferito.
      */
     private void offriCartina(String colore, int obiettivoId, List<String> miei,
-                              Map<String, TerritoryState> mappa, List<String> log) {
+                              Map<String, TerritoryState> mappa, List<String> log, int turno) {
         ObiettivoTarget obj = RisikoBoardData.OBIETTIVI.get(obiettivoId);
 
-        // Trova il partner ideale: più debole e senza continente
         String partnerIdeale = trovaMigliorPartnerCartina(colore, mappa);
         if (partnerIdeale == null) return;
 
-        // Trova territorio fuori obiettivo adiacente al partner, con più di 2 armate
         List<String> lorTerritori = getTerritoriGiocatore(partnerIdeale, mappa);
+
+        // ── CRITERI TERRITORIO DA OFFRIRE ─────────────────────────────────
+        // Preferisce territori che valgono 5-7 punti (molte adiacenze = valore alto)
+        // oppure 5-7 punti SE in obiettivo (doppio valore per il partner)
+        // Il territorio deve avere >2 armate per poter lasciarne 2
+        // Colori con cui NON voglio fare cartina (dominanti + chi non è il partner)
+        Set<String> coloriIndesiderati = mappa.values().stream()
+                .map(TerritoryState::getColore)
+                .filter(c -> !c.equals(colore) && !c.equals(partnerIdeale) && !"?".equals(c))
+                .collect(Collectors.toSet());
+
         Optional<String> territorioDaLasciare = miei.stream()
-                .filter(t -> !isInObiettivo(t, obj))           // fuori obiettivo
+                .filter(t -> !isInObiettivo(t, obj))            // fuori obiettivo
                 .filter(t -> !TERRITORI_STRATEGICI.contains(t)) // non strategico
-                .filter(t -> mappa.get(t).getArmate() > MIN_ARMATE_DIFESA + 1) // ha abbastanza
+                .filter(t -> mappa.get(t).getArmate() > MIN_ARMATE_DIFESA + 1)
                 .filter(t -> getConfinanti(t).stream().anyMatch(lorTerritori::contains)) // adiacente al partner
-                .max(Comparator.comparingInt(t -> mappa.get(t).getArmate()));
+                .filter(t -> getConfinanti(t).size() < 6) // REGOLA: mai su territori con ≥6 punti
+                .filter(t -> getConfinanti(t).stream().noneMatch(adj -> // REGOLA: nessun adiacente indesiderato
+                        coloriIndesiderati.contains(
+                                mappa.getOrDefault(adj, new TerritoryState("?",0)).getColore())))
+                .filter(t -> {
+                    // Valore ottimale: 4-5 adiacenze
+                    int adj = getConfinanti(t).size();
+                    return adj >= 4 && adj <= 5;
+                })
+                .max(Comparator.comparingInt(t -> getConfinanti(t).size()));
+
+        // Fallback: qualsiasi territorio che rispetta le 2 regole fondamentali
+        if (territorioDaLasciare.isEmpty()) {
+            territorioDaLasciare = miei.stream()
+                    .filter(t -> !isInObiettivo(t, obj))
+                    .filter(t -> !TERRITORI_STRATEGICI.contains(t))
+                    .filter(t -> mappa.get(t).getArmate() > MIN_ARMATE_DIFESA + 1)
+                    .filter(t -> getConfinanti(t).stream().anyMatch(lorTerritori::contains))
+                    .filter(t -> getConfinanti(t).size() < 6) // mai ≥6 punti
+                    .filter(t -> getConfinanti(t).stream().noneMatch(adj ->
+                            coloriIndesiderati.contains(
+                                    mappa.getOrDefault(adj, new TerritoryState("?",0)).getColore())))
+                    .max(Comparator.comparingInt(t -> mappa.get(t).getArmate()));
+        }
 
         if (territorioDaLasciare.isEmpty()) return;
+
+        // REGOLA FINALE: non lasciare mai a 2 armate se il partner ha >11 territori
+        // (potrebbe conquistarlo facilmente)
+        if (getTerritoriGiocatore(partnerIdeale, mappa).size() > 11) return;
 
         String terrCartina = territorioDaLasciare.get();
         TerritoryState st = mappa.get(terrCartina);
@@ -1681,6 +2573,7 @@ public class AIPlayerService {
 
         accordiCartina.put(colore, partnerIdeale);
         territoriCartina.put(colore, terrCartina);
+        territoriCartina.put(colore + "_spostato", terrCartina); // spostamento già fatto
 
         log.add("🤝 " + lbl(colore) + " offre cartina a " + lbl(partnerIdeale) +
                 " su " + nom(terrCartina) + " (2 armate)");
@@ -1727,6 +2620,7 @@ public class AIPlayerService {
                 mappa.get(destinazione.get()).getArmate() + armateToSposta);
 
         territoriCartina.put(colore, terrCartina);
+        territoriCartina.put(colore + "_spostato", terrCartina); // spostamento già fatto
         log.add("🤝 " + lbl(colore) + " ricambia cartina a " + lbl(partner) +
                 " su " + nom(terrCartina));
     }
@@ -1739,6 +2633,28 @@ public class AIPlayerService {
      */
     private String trovaMigliorPartnerCartina(String colore,
                                               Map<String, TerritoryState> mappa) {
+        // ── REGOLE CARTINA ──────────────────────────────────────────────────
+        // 1. La cartina esiste SOLO tra 2 giocatori (non in 3 o 4)
+        // 2. Max 2 cartine attive contemporaneamente (coppie alternate: A-B e C-D)
+        // 3. Se già ci sono 2 accordi attivi → non aprire altri
+        // 4. Non fare cartina con chi è già in cartina con qualcun altro
+
+        // Conta accordi attivi totali (ogni accordo è registrato su entrambi i lati)
+        long accordiAttivi = accordiCartina.size() / 2;
+        // In coalizione (giocatore dominante esiste) si ammettono fino a 3 accordi
+        // altrimenti massimo 2
+        boolean dominanteEsiste = mappa.values().stream()
+                .map(TerritoryState::getColore)
+                .filter(c -> !c.equals(colore) && !"?".equals(c))
+                .distinct()
+                .anyMatch(c -> {
+                    List<String> loro = getTerritoriGiocatore(c, mappa);
+                    if (loro.size() > 11) return true;
+                    return RisikoBoardData.CONTINENTI.values().stream().anyMatch(loro::containsAll);
+                });
+        int maxAccordi = dominanteEsiste ? 3 : 2;
+        if (accordiAttivi >= maxAccordi) return null;
+
         List<String> miei = getTerritoriGiocatore(colore, mappa);
         Set<String> adiacenti = miei.stream()
                 .flatMap(t -> getConfinanti(t).stream())
@@ -1748,10 +2664,12 @@ public class AIPlayerService {
 
         return adiacenti.stream()
                 .filter(partner -> {
+                    // Non fare cartina con chi è già in accordo con qualcun altro
+                    if (accordiCartina.containsKey(partner)) return false;
+                    // Non fare cartina con chi ha troppi territori
                     List<String> loro = getTerritoriGiocatore(partner, mappa);
-                    // Non fare cartina con chi ha troppi territori (pericoloso)
-                    if (loro.size() > 14) return false;
-                    // Preferisce chi non ha un continente
+                    if (loro.size() > 11) return false;
+                    // Non fare cartina con chi controlla un continente
                     return RisikoBoardData.CONTINENTI.values().stream()
                             .noneMatch(terrCont -> loro.containsAll(terrCont));
                 })
@@ -1763,6 +2681,25 @@ public class AIPlayerService {
     /**
      * Salva le armate attuali per rilevare spostamenti al turno successivo.
      */
+    /**
+     * Calcola il "peso effettivo" di un avversario per calibrare difesa e attacco.
+     * Territori reali + bonus continente:
+     *   Oceania/Sud America/Africa → +5 territori equivalenti
+     *   Nord America/Europa/Asia   → +10 territori equivalenti
+     */
+    private int calcolaPesoAvversario(String coloreAvv, Map<String, TerritoryState> mappa) {
+        List<String> loro = getTerritoriGiocatore(coloreAvv, mappa);
+        int peso = loro.size();
+        for (Map.Entry<String, List<String>> ce : RisikoBoardData.CONTINENTI.entrySet()) {
+            if (!loro.containsAll(ce.getValue())) continue;
+            peso += switch (ce.getKey()) {
+                case "nordamerica", "europa", "asia" -> 10;
+                default -> 5;
+            };
+        }
+        return peso;
+    }
+
     private void salvaArmaturePrecedenti(Map<String, TerritoryState> mappa) {
         mappa.forEach((t, st) -> armaturePrecedenti.put(t, st.getArmate()));
     }
@@ -1975,3 +2912,4 @@ public class AIPlayerService {
         return Character.toUpperCase(s.charAt(0)) + s.substring(1);
     }
 }
+    
