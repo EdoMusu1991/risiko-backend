@@ -4,7 +4,7 @@ import java.util.*;
 
 /**
  * Dati statici della mappa di RisiKo: territori, adiacenze, continenti, obiettivi.
- * VERSIONE 2: Elvis (id=8) incluso con i suoi 3 continenti target.
+ * Obiettivi aggiornati per corrispondere esattamente al database (territori specifici).
  */
 public class RisikoBoardData {
 
@@ -18,25 +18,25 @@ public class RisikoBoardData {
         // ── CONTINENTI ──────────────────────────────────────────────────────────
         Map<String, List<String>> c = new LinkedHashMap<>();
         c.put("nordamerica", Arrays.asList(
-            "alaska","territori_nordovest","groenlandia","alberta","ontario",
-            "quebec","stati_occidentali","stati_orientali","america_centrale"
+                "alaska","territori_nordovest","groenlandia","alberta","ontario",
+                "quebec","stati_occidentali","stati_orientali","america_centrale"
         ));
         c.put("sudamerica", Arrays.asList("venezuela","peru","brasile","argentina"));
         c.put("europa", Arrays.asList(
-            "islanda","gran_bretagna","europa_settentrionale","scandinavia",
-            "ucraina","europa_occidentale","europa_meridionale"
+                "islanda","gran_bretagna","europa_settentrionale","scandinavia",
+                "ucraina","europa_occidentale","europa_meridionale"
         ));
         c.put("africa", Arrays.asList(
-            "africa_settentrionale","egitto","africa_orientale","congo",
-            "africa_meridionale","madagascar"
+                "africa_settentrionale","egitto","africa_orientale","congo",
+                "africa_meridionale","madagascar"
         ));
         c.put("asia", Arrays.asList(
-            "medio_oriente","afghanistan","india","urali","siberia",
-            "jakutsk","kamchatka","irkutsk","mongolia","cina",
-            "asia_sudorientale","giappone"
+                "medio_oriente","afghanistan","india","urali","siberia",
+                "jakutsk","kamchatka","irkutsk","mongolia","cina",
+                "asia_sudorientale","giappone"
         ));
         c.put("oceania", Arrays.asList(
-            "indonesia","nuova_guinea","australia_occidentale","australia_orientale"
+                "indonesia","nuova_guinea","australia_occidentale","australia_orientale"
         ));
         CONTINENTI = Collections.unmodifiableMap(c);
 
@@ -101,37 +101,186 @@ public class RisikoBoardData {
         a.put("australia_orientale",   Arrays.asList("nuova_guinea","australia_occidentale"));
         ADIACENZE = Collections.unmodifiableMap(a);
 
-        // ── OBIETTIVI ────────────────────────────────────────────────────────────
-        List<String> urss = Arrays.asList("urali","siberia","jakutsk","kamchatka","irkutsk","mongolia");
+        // ── OBIETTIVI ─────────────────────────────────────────────────────────
+        // Territori specifici mappati con i nomi backend (diversi dal database):
+        //   stati_uniti_occidentali → stati_occidentali
+        //   stati_uniti_orientali   → stati_orientali
+        //   territori_del_nord_ovest→ territori_nordovest
+        //   africa_del_nord         → africa_settentrionale
+        //   africa_del_sud          → africa_meridionale
+        //   jacuzia                 → jakutsk
+        //   cita                    → irkutsk
+        //   siam                    → asia_sudorientale
 
         Map<Integer, ObiettivoTarget> obj = new HashMap<>();
-        obj.put(1,  new ObiettivoTarget(1,  "Letto",                   List.of("europa","oceania"),                       null, 0));
-        obj.put(2,  new ObiettivoTarget(2,  "Elefante del Circo",      List.of("africa","asia"),                          null, 0));
-        obj.put(3,  new ObiettivoTarget(3,  "Ciclista",                List.of("nordamerica","africa"),                   null, 0));
-        obj.put(4,  new ObiettivoTarget(4,  "Giraffa",                 List.of("africa","sudamerica"),                    null, 0));
-        obj.put(5,  new ObiettivoTarget(5,  "Granchio",                List.of("sudamerica","europa"),                    null, 0));
-        obj.put(6,  new ObiettivoTarget(6,  "Formula 1",               List.of("asia","oceania"),                         null, 0));
-        obj.put(7,  new ObiettivoTarget(7,  "Befana",                  List.of("africa","sudamerica","oceania"),           null, 0));
-        // ✅ ELVIS: Nord America + Sud America + Europa (3 continenti)
-        obj.put(8,  new ObiettivoTarget(8,  "Elvis",                   List.of("nordamerica","sudamerica","europa"),       null, 0));
-        obj.put(9,  new ObiettivoTarget(9,  "Dromedario",              List.of("europa","asia"),                          null, 0));
-        obj.put(10, new ObiettivoTarget(10, "Piovra",                  List.of("nordamerica","sudamerica"),                null, 0));
-        obj.put(11, new ObiettivoTarget(11, "Lupo",                    List.of("asia"),                                   null, 0));
-        obj.put(12, new ObiettivoTarget(12, "Tappeto",                 null,                                              null, 24));
-        obj.put(13, new ObiettivoTarget(13, "Guerra Fredda",           List.of("nordamerica"),                            urss, 0));
-        obj.put(14, new ObiettivoTarget(14, "Motorino",                List.of("sudamerica","oceania"),                   null, 0));
-        obj.put(15, new ObiettivoTarget(15, "Aragosta con Pesciolino", List.of("asia","sudamerica"),                      null, 0));
-        obj.put(16, new ObiettivoTarget(16, "Locomotiva",              List.of("europa","nordamerica"),                   null, 0));
+
+        // 1. Letto — Nord America + Sud America + parte Asia/Africa/Oceania
+        obj.put(1, new ObiettivoTarget(1, "Letto", null,
+                Arrays.asList(
+                        "alaska","alberta","america_centrale","groenlandia","ontario","quebec",
+                        "stati_occidentali","stati_orientali","territori_nordovest",
+                        "argentina","brasile","peru","venezuela",
+                        "australia_orientale","nuova_guinea","indonesia","asia_sudorientale","india","medio_oriente",
+                        "africa_settentrionale","congo","egitto","africa_orientale"
+                ), 0));
+
+        // 2. Elefante — parte Nord America + Europa + Asia centrale + Africa
+        obj.put(2, new ObiettivoTarget(2, "Elefante del Circo", null,
+                Arrays.asList(
+                        "quebec","groenlandia","ontario","islanda","stati_orientali",
+                        "europa_occidentale","europa_meridionale","europa_settentrionale",
+                        "gran_bretagna","scandinavia","ucraina",
+                        "afghanistan","urali","medio_oriente",
+                        "africa_settentrionale","egitto","congo","africa_orientale","africa_meridionale","madagascar"
+                ), 0));
+
+        // 3. Ciclista — Europa + Asia (parziale) + Oceania + Africa
+        obj.put(3, new ObiettivoTarget(3, "Ciclista", null,
+                Arrays.asList(
+                        "europa_occidentale","europa_meridionale","europa_settentrionale",
+                        "gran_bretagna","islanda","scandinavia","ucraina",
+                        "afghanistan","urali","medio_oriente","india","asia_sudorientale",
+                        "australia_occidentale","australia_orientale","nuova_guinea","indonesia",
+                        "africa_settentrionale","egitto","congo","africa_orientale","africa_meridionale","madagascar"
+                ), 0));
+
+        // 4. Giraffa — Nord America + parte Europa + Africa
+        obj.put(4, new ObiettivoTarget(4, "Giraffa", null,
+                Arrays.asList(
+                        "alaska","alberta","america_centrale","groenlandia","ontario","quebec",
+                        "stati_occidentali","stati_orientali","territori_nordovest",
+                        "europa_meridionale","europa_settentrionale","gran_bretagna","islanda","scandinavia","ucraina",
+                        "africa_settentrionale","egitto","congo","africa_orientale","africa_meridionale","madagascar"
+                ), 0));
+
+        // 5. Granchio — Nord America + parte Europa + Asia + Oceania
+        obj.put(5, new ObiettivoTarget(5, "Granchio", null,
+                Arrays.asList(
+                        "alaska","alberta","america_centrale","groenlandia","ontario","quebec",
+                        "stati_occidentali","stati_orientali","territori_nordovest",
+                        "islanda","scandinavia","ucraina",
+                        "afghanistan","urali","medio_oriente","cina","india","asia_sudorientale",
+                        "australia_occidentale","australia_orientale","nuova_guinea","indonesia"
+                ), 0));
+
+        // 6. Formula 1 — Europa + Asia (parziale) + Sud America + Oceania + Africa (parziale)
+        obj.put(6, new ObiettivoTarget(6, "Formula 1", null,
+                Arrays.asList(
+                        "europa_occidentale","europa_meridionale","europa_settentrionale",
+                        "gran_bretagna","islanda","scandinavia","ucraina",
+                        "afghanistan","medio_oriente","india","asia_sudorientale",
+                        "argentina","brasile","peru","venezuela",
+                        "australia_occidentale","australia_orientale","nuova_guinea","indonesia",
+                        "africa_settentrionale","egitto","africa_orientale"
+                ), 0));
+
+        // 7. Befana — Sud America + Africa + Asia orientale + Oceania (parziale)
+        obj.put(7, new ObiettivoTarget(7, "Befana", null,
+                Arrays.asList(
+                        "argentina","brasile","peru","venezuela",
+                        "africa_settentrionale","egitto","congo","africa_orientale","africa_meridionale","madagascar",
+                        "afghanistan","urali","medio_oriente","india","asia_sudorientale","cina",
+                        "mongolia","jakutsk","irkutsk","siberia","kamchatka","giappone","indonesia"
+                ), 0));
+
+        // 8. Elvis — Nord America + Sud America + Europa + Kamchatka/Giappone
+        obj.put(8, new ObiettivoTarget(8, "Elvis", null,
+                Arrays.asList(
+                        "alaska","alberta","america_centrale","groenlandia","ontario","quebec",
+                        "stati_occidentali","stati_orientali","territori_nordovest",
+                        "argentina","brasile","peru","venezuela",
+                        "europa_occidentale","europa_meridionale","europa_settentrionale",
+                        "gran_bretagna","islanda","scandinavia","ucraina",
+                        "kamchatka","giappone"
+                ), 0));
+
+        // 9. Dromedario con mosca — Europa + Asia orientale completa + Indonesia
+        obj.put(9, new ObiettivoTarget(9, "Dromedario", null,
+                Arrays.asList(
+                        "europa_occidentale","europa_meridionale","europa_settentrionale",
+                        "gran_bretagna","islanda","scandinavia","ucraina",
+                        "afghanistan","urali","medio_oriente","india","asia_sudorientale","cina",
+                        "mongolia","jakutsk","irkutsk","siberia","kamchatka","giappone","indonesia"
+                ), 0));
+
+        // 10. Piovra — Nord America + Europa + Asia settentrionale
+        obj.put(10, new ObiettivoTarget(10, "Piovra", null,
+                Arrays.asList(
+                        "alaska","alberta","america_centrale","groenlandia","ontario","quebec",
+                        "stati_occidentali","stati_orientali","territori_nordovest",
+                        "europa_occidentale","europa_meridionale","europa_settentrionale",
+                        "gran_bretagna","islanda","scandinavia","ucraina",
+                        "urali","siberia","kamchatka","giappone","jakutsk"
+                ), 0));
+
+        // 11. Lupo (Siberiana) — Europa + Asia centrale + Africa + Sud America
+        obj.put(11, new ObiettivoTarget(11, "Lupo", null,
+                Arrays.asList(
+                        "europa_occidentale","europa_meridionale","europa_settentrionale",
+                        "gran_bretagna","islanda","scandinavia","ucraina",
+                        "siberia","urali","afghanistan","medio_oriente",
+                        "africa_settentrionale","egitto","congo","africa_orientale","africa_meridionale","madagascar",
+                        "argentina","brasile","peru","venezuela"
+                ), 0));
+
+        // 12. Tappeto — Africa + Asia + Europa (parziale)
+        obj.put(12, new ObiettivoTarget(12, "Tappeto", null,
+                Arrays.asList(
+                        "africa_settentrionale","egitto","congo","africa_orientale","africa_meridionale","madagascar",
+                        "afghanistan","urali","medio_oriente","india","asia_sudorientale","cina",
+                        "mongolia","jakutsk","irkutsk","siberia","kamchatka","giappone","indonesia",
+                        "europa_meridionale","ucraina"
+                ), 0));
+
+        // 13. Guerra Fredda — Nord America + Asia orientale completa
+        obj.put(13, new ObiettivoTarget(13, "Guerra Fredda", null,
+                Arrays.asList(
+                        "alaska","alberta","america_centrale","groenlandia","ontario","quebec",
+                        "stati_occidentali","stati_orientali","territori_nordovest",
+                        "afghanistan","urali","medio_oriente","india","asia_sudorientale","cina",
+                        "mongolia","jakutsk","siberia","irkutsk","kamchatka","giappone"
+                ), 0));
+
+        // 14. Motorino — Sud America + Africa + Oceania + Asia (parziale)
+        obj.put(14, new ObiettivoTarget(14, "Motorino", null,
+                Arrays.asList(
+                        "argentina","brasile","peru","venezuela",
+                        "africa_settentrionale","egitto","congo","africa_orientale","africa_meridionale","madagascar",
+                        "australia_occidentale","australia_orientale","nuova_guinea","indonesia",
+                        "europa_occidentale","europa_meridionale","medio_oriente","india","asia_sudorientale","cina",
+                        "mongolia","irkutsk","giappone"
+                ), 0));
+
+        // 15. Aragosta e pesciolino — Alaska/Alberta + Africa (parziale) + Asia + Oceania
+        obj.put(15, new ObiettivoTarget(15, "Aragosta con Pesciolino", null,
+                Arrays.asList(
+                        "alaska","alberta",
+                        "egitto","congo","africa_orientale","africa_meridionale","madagascar",
+                        "afghanistan","urali","medio_oriente","india","asia_sudorientale","cina",
+                        "mongolia","jakutsk","siberia","kamchatka","giappone","irkutsk","indonesia",
+                        "australia_occidentale","australia_orientale","nuova_guinea"
+                ), 0));
+
+        // 16. Locomotiva — Nord America + Sud America + Africa + Europa (parziale)
+        obj.put(16, new ObiettivoTarget(16, "Locomotiva", null,
+                Arrays.asList(
+                        "alaska","alberta","america_centrale","groenlandia","ontario","quebec",
+                        "stati_occidentali","stati_orientali","territori_nordovest",
+                        "argentina","brasile","peru","venezuela",
+                        "africa_settentrionale","egitto","congo","africa_orientale","africa_meridionale","madagascar",
+                        "europa_occidentale","ucraina","europa_meridionale"
+                ), 0));
+
         OBIETTIVI = Collections.unmodifiableMap(obj);
     }
 
     // ── RECORD OBIETTIVO ────────────────────────────────────────────────────────
     public record ObiettivoTarget(
-        int            id,
-        String         nome,
-        List<String>   continentiTarget,
-        List<String>   territoriSpecifici,
-        int            minimoTerritoriTarget
+            int            id,
+            String         nome,
+            List<String>   continentiTarget,
+            List<String>   territoriSpecifici,
+            int            minimoTerritoriTarget
     ) {}
 
     // ── UTILITY ─────────────────────────────────────────────────────────────────
@@ -148,9 +297,9 @@ public class RisikoBoardData {
         return Character.toUpperCase(s.charAt(0)) + s.substring(1);
     }
 
-    /** Conta quanti territori di un continente appartengono al colore dato */
     public static long countTerritoriInContinente(String continente, String colore,
-                                                   Map<String, ?> mappa, java.util.function.Function<Object,String> getColore) {
+                                                  Map<String, ?> mappa,
+                                                  java.util.function.Function<Object,String> getColore) {
         List<String> terr = CONTINENTI.getOrDefault(continente, List.of());
         return terr.stream().filter(t -> {
             Object s = mappa.get(t);

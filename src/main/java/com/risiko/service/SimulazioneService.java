@@ -35,6 +35,8 @@ public class SimulazioneService {
     private static final Random   RANDOM = new Random();
     public  static final int      COSTO_HINT = 10;
     private int turno = 1;
+
+
     // ── GENERA SIMULAZIONE ────────────────────────────────────────────────────
 
     public NuovaSimulazioneDto generaSimulazione(NuovaSimulazioneRequest req) {
@@ -47,7 +49,22 @@ public class SimulazioneService {
 
         Map<String, TerritoryState> mappa              = inizializzaMappa();
         Map<String, Integer>        obiettiviPerColore = assegnaObiettivi();
-
+        // Boost territori in obiettivo: portali ad almeno 8-10 armate
+        obiettiviPerColore.forEach((colore, obiettivoId) -> {
+            RisikoBoardData.ObiettivoTarget obj = RisikoBoardData.OBIETTIVI.get(obiettivoId);
+            if (obj == null) return;
+            mappa.forEach((territorio, state) -> {
+                if (!colore.equals(state.getColore())) return;
+                boolean inObj = (obj.continentiTarget() != null &&
+                        obj.continentiTarget().stream().anyMatch(cont ->
+                                RisikoBoardData.CONTINENTI.getOrDefault(cont, List.of()).contains(territorio)))
+                        || (obj.territoriSpecifici() != null &&
+                        obj.territoriSpecifici().contains(territorio));
+                if (inObj && state.getArmate() < 8) {
+                    state.setArmate(8 + RANDOM.nextInt(3)); // 8-10 armate in obiettivo
+                }
+            });
+        });
         SimulazionePartita sim = new SimulazionePartita();
         sim.setCreataIl(LocalDateTime.now());
         sim = simRepo.save(sim);
@@ -61,14 +78,20 @@ public class SimulazioneService {
         }
 
         List<SnapshotTurnoDto> snapshots = new ArrayList<>();
-        snapshots.add(creaSnapshot(0, mappa, buildLogIniziale(mappa, diff, turni)));
-
+        snapshots.add(creaSnapshot(0, mappa, buildLogIniziale(mappa, diff, turni),
+                List.of(), Map.of(), List.of(), List.of()));
         Set<String> attivi = new LinkedHashSet<>(Arrays.asList(COLORI));
         boolean partitaFinita = false;
 
         for (int t = 1; t <= turni && !partitaFinita; t++) {
             List<String> logTurno = new ArrayList<>();
             logTurno.add("══════ TURNO " + t + " / " + turni + " ══════");
+
+            // Accumula eventi di tutti i giocatori del turno
+            List<AttaccoEventoDto>     attacchiTurno  = new ArrayList<>();
+            Map<String, StatoCarteDto> stateCarteTurno = new LinkedHashMap<>();
+            List<EventoCartinaDto>     cartineTurno   = new ArrayList<>();
+            List<EventoTrisDto>        trisTurno      = new ArrayList<>();
 
             for (String colore : List.copyOf(attivi)) {
                 if (aiService.getTerritoriGiocatore(colore, mappa).isEmpty()) {
@@ -81,10 +104,15 @@ public class SimulazioneService {
                         colore, obiettiviPerColore.get(colore), t, mappa);
                 logTurno.addAll(risultato.log());
 
-                // Sdadata: partita finita
+                risultato.attacchi().forEach(e -> attacchiTurno.add(new AttaccoEventoDto(e.da(), e.verso(), e.coloreAttaccante(), e.coloreDifensore(), e.conquistato())));
+                risultato.statoCarte().forEach((c, s) -> stateCarteTurno.put(c, new StatoCarteDto(s.fanti(), s.cannoni(), s.cavalli(), s.jolly(), s.totale())));
+                risultato.cartine().forEach(c -> cartineTurno.add(new EventoCartinaDto(c.coloreOffre(), c.coloreRiceve(), c.territorio())));
+                risultato.tris().forEach(tr -> trisTurno.add(new EventoTrisDto(tr.colore(), tr.bonus(), tr.tipo())));
+
                 if (risultato.sdadata() != null && risultato.sdadata().riuscita()) {
                     logTurno.add("🏆 " + lbl(colore) + " vince con la sdadata!");
-                    snapshots.add(creaSnapshot(t, mappa, logTurno));
+                    snapshots.add(creaSnapshot(t, mappa, logTurno,
+                            attacchiTurno, stateCarteTurno, cartineTurno, trisTurno));
                     partitaFinita = true;
                     break;
                 }
@@ -96,15 +124,16 @@ public class SimulazioneService {
                     }
                 }
             }
-
             if (!partitaFinita) {
                 aggiungiRiepilogoContinenti(logTurno, mappa);
-                snapshots.add(creaSnapshot(t, mappa, logTurno));
+                snapshots.add(creaSnapshot(t, mappa, logTurno,
+                        attacchiTurno, stateCarteTurno, cartineTurno, trisTurno));
 
                 if (attivi.size() == 1) {
                     String vincitore = attivi.iterator().next();
                     snapshots.add(creaSnapshot(t + 1, mappa,
-                            List.of("🏆 " + lbl(vincitore) + " ha conquistato il mondo! Simulazione terminata.")));
+                            List.of("🏆 " + lbl(vincitore) + " ha conquistato il mondo! Simulazione terminata."),
+                            List.of(), Map.of(), List.of(), List.of()));
                     break;
                 }
             }
@@ -250,7 +279,7 @@ public class SimulazioneService {
         int idx = 0;
         for (int p = 0; p < COLORI.length; p++)
             for (int t = 0; t < dims[p]; t++)
-                mappa.put(tutti.get(idx++), new TerritoryState(COLORI[p], 2 + RANDOM.nextInt(3)));
+                mappa.put(tutti.get(idx++), new TerritoryState(COLORI[p], 6 + RANDOM.nextInt(2)));
         return mappa;
     }
 
@@ -262,10 +291,17 @@ public class SimulazioneService {
         return r;
     }
 
-    private SnapshotTurnoDto creaSnapshot(int turno, Map<String, TerritoryState> mappa, List<String> logAzioni) {
+    private SnapshotTurnoDto creaSnapshot(int turno,
+                                          Map<String, TerritoryState> mappa,
+                                          List<String> logAzioni,
+                                          List<AttaccoEventoDto> attacchi,
+                                          Map<String, StatoCarteDto> statoCarte,
+                                          List<EventoCartinaDto> cartine,
+                                          List<EventoTrisDto> tris) {
         Map<String, TerritoryStateDto> snap = new LinkedHashMap<>();
         mappa.forEach((k, v) -> snap.put(k, new TerritoryStateDto(v.getColore(), v.getArmate())));
-        return new SnapshotTurnoDto(turno, snap, new ArrayList<>(logAzioni));
+        return new SnapshotTurnoDto(turno, snap, new ArrayList<>(logAzioni),
+                attacchi, statoCarte, cartine, tris);
     }
 
     private List<String> buildLogIniziale(Map<String, TerritoryState> mappa, String diff, int turni) {
@@ -308,4 +344,6 @@ public class SimulazioneService {
     private String cap(String s) {
         return s == null || s.isEmpty() ? s : Character.toUpperCase(s.charAt(0)) + s.substring(1);
     }
+
+
 }

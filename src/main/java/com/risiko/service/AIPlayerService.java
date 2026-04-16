@@ -30,7 +30,7 @@ public class AIPlayerService {
     private static final int MIN_ARMATE_DIFESA = 2;
 
     // ── Soglia minima territori per non scendere sotto 3 rinforzi/turno ───────
-    private static final int SOGLIA_MIN_TERRITORI = 9;
+    private static final int SOGLIA_MIN_TERRITORI = 7;
 
     // ── Ordine preferenziale continenti da completare ─────────────────────────
     private static final List<String> ORDINE_CONTINENTI = List.of(
@@ -63,17 +63,50 @@ public class AIPlayerService {
     private final ObiettivoInferencer inferencer = new ObiettivoInferencer();
     private boolean inferencerInizializzato = false;
 
+    // ── Tracking eventi per il frontend ──────────────────────────────────────
+    private final List<EventoAttacco>   eventiAttaccoTurno  = new ArrayList<>();
+    private final List<EventoCartina>   eventiCartinaTurno  = new ArrayList<>();
+    private final List<EventoTris>      eventiTrisTurno     = new ArrayList<>();
+
     // ═══════════════════════════════════════════════════════════════════════════
     //  RECORD DI OUTPUT (NUOVO)
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * Risultato di un turno completo: log eventi + esito sdadata.
-     *
-     * @param log     lista di messaggi del turno
-     * @param sdadata esito della sdadata, null se non tentata
+     * Risultato di un turno completo: log + sdadata + attacchi + stato carte.
      */
-    public record TurnoResult(List<String> log, SdadataResult sdadata) {}
+    public record TurnoResult(
+            List<String>              log,
+            SdadataResult             sdadata,
+            List<EventoAttacco>       attacchi,
+            Map<String, StatoCarte>   statoCarte,
+            List<EventoCartina>       cartine,
+            List<EventoTris>          tris) {}
+
+    /** Singolo attacco del turno (usato per le frecce SVG nel frontend). */
+    public record EventoAttacco(
+            String  da,
+            String  verso,
+            String  coloreAttaccante,
+            String  coloreDifensore,
+            boolean conquistato) {}
+
+    /** Uso di un tris in questo turno. */
+    public record EventoTris(
+            String colore,
+            int    bonus,
+            String tipo) {} // "DIVERSI", "UGUALI", "JOLLY"
+
+    /** Accordo di cartina rilevato o offerto in questo turno. */
+    public record EventoCartina(
+            String coloreOffre,
+            String coloreRiceve,
+            String territorio) {}
+
+    /** Stato mano carte di un giocatore. */
+    public record StatoCarte(int fanti, int cannoni, int cavalli, int jolly) {
+        public int totale() { return fanti + cannoni + cavalli + jolly; }
+    }
 
     /**
      * Esito del tentativo di sdadata.
@@ -83,7 +116,7 @@ public class AIPlayerService {
      * @param dado1    valore primo dado
      * @param dado2    valore secondo dado
      * @param totale   somma dado1+dado2
-     * @param soglia   soglia massima (T25=4, T26=5, T27=6, T28+=7)
+     * @param soglia   soglia massima (T35=4, T36=5, T37=6, T38+=7)
      */
     public record SdadataResult(
             boolean tentato, boolean riuscita,
@@ -222,10 +255,14 @@ public class AIPlayerService {
         }
 
         List<String> miei = getTerritoriGiocatore(colore, mappa);
-        if (miei.isEmpty()) return new TurnoResult(log, null);
+        if (miei.isEmpty()) return new TurnoResult(log, null,
+                List.of(), Map.of(), List.of(), List.of());
 
-        // Azzera contatore conquiste del turno
+        // Azzera contatore conquiste e liste eventi del turno
         territorConquistatiNelTurno.put(colore, 0);
+        eventiAttaccoTurno.clear();
+        eventiCartinaTurno.clear();
+        eventiTrisTurno.clear();
 
         // 1. Usa tris se strategicamente utile
         usaTrisSeUtile(colore, obiettivoId, miei, mappa, log);
@@ -235,7 +272,7 @@ public class AIPlayerService {
         piazzaRinforzi(colore, rinforzi, obiettivoId, miei, mappa, log);
 
         // 3. Esegui attacchi (include logica cartina)
-        eseguiAttacchi(colore, obiettivoId, mappa, log);
+        eseguiAttacchi(colore, obiettivoId, turno, mappa, log);
 
         // 4. Pesca carta se ha conquistato almeno 1 territorio
         if (territorConquistatiNelTurno.getOrDefault(colore, 0) > 0) {
@@ -267,7 +304,37 @@ public class AIPlayerService {
             }
         }
 
-        return new TurnoResult(log, sdadata);
+        // Costruisce lo stato carte di tutti i giocatori
+        Map<String, StatoCarte> statoCarte = new HashMap<>();
+        for (String c : mappa.values().stream()
+                .map(TerritoryState::getColore)
+                .filter(c2 -> !"?".equals(c2))
+                .collect(Collectors.toSet())) {
+            statoCarte.put(c, buildStatoCarte(c));
+        }
+
+        return new TurnoResult(
+                log,
+                sdadata,
+                List.copyOf(eventiAttaccoTurno),
+                Collections.unmodifiableMap(statoCarte),
+                List.copyOf(eventiCartinaTurno),
+                List.copyOf(eventiTrisTurno));
+    }
+
+    /** Costruisce lo StatoCarte corrente per un giocatore. */
+    private StatoCarte buildStatoCarte(String colore) {
+        List<Carta> mano = maniCarte.getOrDefault(colore, List.of());
+        int f = 0, c = 0, k = 0, j = 0;
+        for (Carta carta : mano) {
+            switch (carta.simbolo()) {
+                case FANTE   -> f++;
+                case CANNONE -> c++;
+                case CAVALLO -> k++;
+                case JOLLY   -> j++;
+            }
+        }
+        return new StatoCarte(f, c, k, j);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -343,6 +410,15 @@ public class AIPlayerService {
         }
 
         // Rimuovi le 3 carte usate
+        // Determina tipo tris per il frontend
+        List<Carta> prime3 = mano.subList(0, 3);
+        Map<Simbolo, Long> cnt = prime3.stream()
+                .collect(Collectors.groupingBy(Carta::simbolo, Collectors.counting()));
+        String tipoTris = cnt.getOrDefault(Simbolo.JOLLY, 0L) >= 1 ? "JOLLY"
+                : cnt.values().stream().anyMatch(v -> v >= 3) ? "UGUALI"
+                : "DIVERSI";
+        eventiTrisTurno.add(new EventoTris(colore, bonusTris, tipoTris));
+
         mano.subList(0, 3).clear();
     }
 
@@ -395,179 +471,174 @@ public class AIPlayerService {
         };
     }
 
+    private static final int MAX_ARMATE_TOTALI = 130;
+
     private void piazzaRinforzi(String colore, int rinforzi, int obiettivoId,
                                 List<String> miei, Map<String, TerritoryState> mappa,
                                 List<String> log) {
         ObiettivoTarget obj = RisikoBoardData.OBIETTIVI.get(obiettivoId);
 
+        // ── CAP 130 armate totali ─────────────────────────────────────────────
+        int armateAttuali = miei.stream().mapToInt(t -> mappa.get(t).getArmate()).sum();
+        int spazio = Math.max(0, MAX_ARMATE_TOTALI - armateAttuali);
+        if (spazio == 0) {
+            log.add("🚫 " + lbl(colore) + " ha raggiunto il limite di " + MAX_ARMATE_TOTALI + " armate");
+            return;
+        }
+        int rim = Math.min(rinforzi, spazio);
+
         List<String> confine = getTerritoriBordoNemico(colore, miei, mappa);
         if (confine.isEmpty()) confine = miei;
 
-        int rim = rinforzi;
+        // ── FASE 1 (difesa): porta i territori di confine ad almeno 6 armate ──
+        // Meno di 6 armate = bersaglio facile per la pesca carte nemica.
+        // Usa al massimo metà dei rinforzi per questa fase difensiva.
+        final int MINIMO_DIFESA_CONFINE = 6;
+        int budgetDifesa = Math.max(0, rim / 2);
 
-        // ── PRIORITÀ 0: territori con ≤ 2 armate → porta tutti a 3 ─────────────
-        // Bersagli gratuiti per la pesca carte avversaria.
-        List<String> debolissimi = confine.stream()
-                .filter(t -> mappa.get(t).getArmate() <= MIN_ARMATE_DIFESA)
+        List<String> daRinforzare = confine.stream()
+                .filter(t -> mappa.get(t).getArmate() < MINIMO_DIFESA_CONFINE)
                 .sorted(Comparator.comparingInt(t -> mappa.get(t).getArmate()))
                 .collect(Collectors.toList());
 
-        for (String t : debolissimi) {
-            if (rim <= 0) break;
-            int attuale      = mappa.get(t).getArmate();
-            int daAggiungere = Math.min(3 - attuale, rim);
-            if (daAggiungere > 0) {
-                mappa.get(t).setArmate(attuale + daAggiungere);
-                rim -= daAggiungere;
-                log.add("🔒 " + lbl(colore) + " rinforza esposto " +
-                        nom(t) + " (" + attuale + "→" + (attuale + daAggiungere) + ")");
+        for (String t : daRinforzare) {
+            if (budgetDifesa <= 0) break;
+            int attuale  = mappa.get(t).getArmate();
+            int mancanti = MINIMO_DIFESA_CONFINE - attuale;
+            int aggiunti = Math.min(mancanti, budgetDifesa);
+            if (aggiunti > 0) {
+                mappa.get(t).setArmate(attuale + aggiunti);
+                rim          -= aggiunti;
+                budgetDifesa -= aggiunti;
+                log.add("🔒 " + lbl(colore) + " difende " + nom(t) +
+                        " (" + attuale + "→" + (attuale + aggiunti) + ")");
             }
         }
+        if (rim <= 0) { log.add("🛡 " + lbl(colore) + " piazza " + rinforzi + " armate"); return; }
 
-        if (rim <= 0) {
-            log.add("🛡 " + lbl(colore) + " piazza " + rinforzi + " armate");
-            return;
-        }
+        // ── FASE 2 (offensiva): accumula TUTTE le armate restanti ────────────
+        // Ordine priorità del territorio su cui concentrare:
+        //   1. In obiettivo + strategico  ← fare punti è l'unica condizione di vittoria
+        //   2. In obiettivo
+        //   3. Confine del continente da completare
+        //   4. Blocca continente avversario  ← peso ridotto, non blocca le altre priorità
+        //   5. Qualsiasi confine
 
-        // ── PRIORITÀ 1: territori 3-6 armate sotto pressione nemica ────────────
-        // Per ogni territorio di confine calcola la pressione: max armate nemiche
-        // adiacenti. Se il nemico ha abbastanza per attaccare (≥ 2x le mie armate),
-        // il territorio è a rischio. I territori in obiettivo hanno soglia più bassa.
-        //
-        // Rinforzi assegnati per livello di rischio (cap: max 2 rinforzi per
-        // territorio in questa fase, per non svuotare il budget):
-        //   - In obiettivo sotto pressione forte (nemico ≥ 1.5x): +2
-        //   - In obiettivo sotto pressione media (nemico ≥ 1.0x): +1
-        //   - Fuori obiettivo sotto pressione forte (nemico ≥ 2.0x): +1
-
-        // Calcola pressione per ogni territorio di confine
-        record Pressione(String territorio, int mie, int maxNemica, boolean inObj) {}
-
-        List<Pressione> pressioni = confine.stream()
-                .filter(t -> {
-                    int armate = mappa.get(t).getArmate();
-                    return armate >= 3 && armate <= 6; // fascia a rischio
-                })
-                .map(t -> {
-                    int mie = mappa.get(t).getArmate();
-                    int maxNem = getConfinanti(t).stream()
-                            .map(mappa::get)
-                            .filter(st -> st != null && !colore.equals(st.getColore()))
-                            .mapToInt(TerritoryState::getArmate)
-                            .max().orElse(0);
-                    return new Pressione(t, mie, maxNem, isInObiettivo(t, obj));
-                })
-                // Ordina: prima i più a rischio (rapporto nemico/mie più alto)
-                .sorted(Comparator.comparingDouble(
-                        (Pressione p) -> (double) p.maxNemica() / Math.max(1, p.mie())).reversed())
-                .collect(Collectors.toList());
-
-        for (Pressione p : pressioni) {
-            if (rim <= 0) break;
-
-            double rapporto = (double) p.maxNemica() / Math.max(1, p.mie());
-            int daAggiungere = 0;
-
-            if (p.inObj()) {
-                // Territorio in obiettivo: difendo anche sotto pressione media
-                if      (rapporto >= 1.5) daAggiungere = Math.min(2, rim);
-                else if (rapporto >= 1.0) daAggiungere = Math.min(1, rim);
-            } else {
-                // Fuori obiettivo: intervengo solo sotto pressione forte (il nemico
-                // ha già il doppio → può attaccare subito)
-                if (rapporto >= 2.0) daAggiungere = Math.min(1, rim);
-            }
-
-            if (daAggiungere > 0) {
-                int prima = mappa.get(p.territorio()).getArmate();
-                mappa.get(p.territorio()).setArmate(prima + daAggiungere);
-                rim -= daAggiungere;
-                log.add("🛡 " + lbl(colore) + " difende " + nom(p.territorio()) +
-                        " (" + prima + "→" + (prima + daAggiungere) +
-                        ", pressione " + p.maxNemica() + " nem.)");
-            }
-        }
-
-        if (rim <= 0) {
-            log.add("🛡 " + lbl(colore) + " piazza " + rinforzi + " armate");
-            return;
-        }
-
-        // ── PRIORITÀ 2-N: logica obiettivo / strategica / continenti ────────────
         String continenteDaDifendere = trovaContinenteDaDifendere(colore, mappa);
         List<String> ordine = new ArrayList<>();
 
-        if (continenteDaDifendere != null) {
-            List<String> terrCont = RisikoBoardData.CONTINENTI.get(continenteDaDifendere);
-            confine.stream()
-                    .filter(t -> terrCont != null && terrCont.contains(t))
-                    .forEach(ordine::add);
-        }
-
+        // 1. In obiettivo + strategico (massima priorità)
         confine.stream()
                 .filter(t -> isInObiettivo(t, obj) && TERRITORI_STRATEGICI.contains(t))
                 .forEach(ordine::add);
 
-        confine.stream()
-                .filter(t -> isInObiettivo(t, obj))
-                .forEach(ordine::add);
+        // 2. In obiettivo
+        confine.stream().filter(t -> isInObiettivo(t, obj)).forEach(ordine::add);
 
-        for (String cont : ORDINE_CONTINENTI) {
-            if (!isInObiettivoContinente(cont, obj)) continue;
-            List<String> terrCont = RisikoBoardData.CONTINENTI.getOrDefault(cont, List.of());
-            confine.stream().filter(terrCont::contains).forEach(ordine::add);
+        // 3. Blocca continente avversario (dopo obiettivo, non prima)
+        if (continenteDaDifendere != null) {
+            List<String> tc = RisikoBoardData.CONTINENTI.get(continenteDaDifendere);
+            confine.stream().filter(t -> tc != null && tc.contains(t)).forEach(ordine::add);
         }
 
+        // 4. Confine del continente da completare
+        for (String cont : ORDINE_CONTINENTI) {
+            if (!isInObiettivoContinente(cont, obj)) continue;
+            List<String> tc = RisikoBoardData.CONTINENTI.getOrDefault(cont, List.of());
+            confine.stream().filter(tc::contains).forEach(ordine::add);
+        }
+
+        // Tutto il confine
         ordine.addAll(confine);
         List<String> ord = ordine.stream().distinct().collect(Collectors.toList());
         if (ord.isEmpty()) ord = miei;
 
+        // Concentra sul territorio prioritario, rispettando il cap di 25 armate.
+        // Nessun territorio può superare 25 carri — inutile accumulare di più.
+        final int CAP_ARMATE_TERRITORIO = 25;
         String principale = ord.get(0);
-        int iniziali = Math.min(3, rim);
-        mappa.get(principale).setArmate(mappa.get(principale).getArmate() + iniziali);
-        rim -= iniziali;
-
-        int idx = 1;
-        while (rim > 0) {
-            String t = ord.get(idx % ord.size());
-            mappa.get(t).setArmate(mappa.get(t).getArmate() + 1);
-            rim--;
-            idx++;
+        int attualePrincipale = mappa.get(principale).getArmate();
+        int spazioDisponibile = Math.max(0, CAP_ARMATE_TERRITORIO - attualePrincipale);
+        int daAggiungere = Math.min(rim, spazioDisponibile);
+        if (daAggiungere > 0) {
+            mappa.get(principale).setArmate(attualePrincipale + daAggiungere);
+            rim -= daAggiungere;
         }
-        log.add("🛡 " + lbl(colore) + " piazza " + rinforzi + " armate");
+        // Se il principale è già a 25, distribuisce sugli altri territori in ordine
+        int idxExtra = 1;
+        while (rim > 0 && idxExtra < ord.size()) {
+            String t = ord.get(idxExtra % ord.size());
+            int attualeT = mappa.get(t).getArmate();
+            if (attualeT < CAP_ARMATE_TERRITORIO) {
+                mappa.get(t).setArmate(attualeT + 1);
+                rim--;
+            }
+            idxExtra++;
+            if (idxExtra >= ord.size()) break; // evita loop infinito
+        }
+        log.add("🛡 " + lbl(colore) + " piazza " + rinforzi + " armate su " + nom(principale));
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
     //  ATTACCHI
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private void eseguiAttacchi(String colore, int obiettivoId,
+    private void eseguiAttacchi(String colore, int obiettivoId, int turno,
                                 Map<String, TerritoryState> mappa, List<String> log) {
         ObiettivoTarget obj = RisikoBoardData.OBIETTIVI.get(obiettivoId);
 
-        // Calcola punteggio attuale dell'AI e degli avversari
         int punteggioMio = calcolaPunteggioAttuale(colore, obiettivoId, mappa);
         int punteggioMassAvversari = getMassimoPunteggioAvversari(colore, mappa);
         boolean sonoInVantaggio = punteggioMio > punteggioMassAvversari;
-
-        // Se sono in vantaggio, limito a max 2 conquiste per poter sdadare
         int maxConquiste = sonoInVantaggio ? 2 : Integer.MAX_VALUE;
 
-        for (int tentativo = 0; tentativo < 5; tentativo++) {
+        // ── Risiko è un gioco difensivo: con l'avanzare dei turni si attacca meno ──
+        // ECCEZIONE: se ha < 9 territori, attacca aggressivamente per garantire
+        // almeno 3 rinforzi/turno (max(3, territori/3) = 3 solo con ≥9 territori)
+        List<String> mieiPerConteggio = getTerritoriGiocatore(colore, mappa);
+        boolean sottoSogliaTerritoriMinimi = mieiPerConteggio.size() < 9;
+
+        int maxAttacchi;
+        double moltiplicatoreSoglia;
+        if (sottoSogliaTerritoriMinimi) {
+            // Emergenza: recupera territori a tutti i costi
+            maxAttacchi = 8;
+            moltiplicatoreSoglia = 1.5; // soglia bassa per attaccare anche con meno vantaggio
+        } else if (turno <= 8) {
+            maxAttacchi = 5;
+            moltiplicatoreSoglia = 2.0;
+        } else if (turno <= 20) {
+            maxAttacchi = 3;
+            moltiplicatoreSoglia = 2.5;
+        } else {
+            maxAttacchi = 1;
+            moltiplicatoreSoglia = 3.0;
+        }
+
+        // Territori già tentati e falliti in questo turno — non riprovarli
+        Set<String> giaTentati = new HashSet<>();
+        int fallitiConsecutivi = 0;
+
+        for (int tentativo = 0; tentativo < maxAttacchi; tentativo++) {
             List<String> miei = getTerritoriGiocatore(colore, mappa);
 
-            // Non attaccare se troppo pochi territori
             if (miei.size() <= SOGLIA_MIN_TERRITORI) break;
-
-            // Stop se ho già raggiunto il limite conquiste per sdadata
             if (territorConquistatiNelTurno.getOrDefault(colore, 0) >= maxConquiste
                     && sonoInVantaggio) break;
+            // Dopo 3 fallimenti consecutivi senza conquiste, smette
+            if (fallitiConsecutivi >= 3) break;
 
-            AttaccoCandidate best = trovaMigliorAttacco(colore, miei, mappa, obj);
+            AttaccoCandidate best = trovaMigliorAttacco(colore, miei, mappa, obj, giaTentati, moltiplicatoreSoglia, turno);
             if (best == null) break;
 
             boolean vinto = eseguiAttacco(best, mappa, log, colore);
-            if (!vinto) break; // Se fallisce, smette di attaccare
+            if (vinto) {
+                fallitiConsecutivi = 0;
+                giaTentati.clear(); // dopo una conquista, tutti i bersagli sono di nuovo validi
+            } else {
+                giaTentati.add(best.verso()); // non riprovare questo bersaglio
+                fallitiConsecutivi++;
+            }
         }
     }
 
@@ -576,28 +647,42 @@ public class AIPlayerService {
     private AttaccoCandidate trovaMigliorAttacco(String colore, List<String> miei,
                                                  Map<String, TerritoryState> mappa,
                                                  ObiettivoTarget obj) {
+        return trovaMigliorAttacco(colore, miei, mappa, obj, Set.of());
+    }
+
+    private AttaccoCandidate trovaMigliorAttacco(String colore, List<String> miei,
+                                                 Map<String, TerritoryState> mappa,
+                                                 ObiettivoTarget obj,
+                                                 Set<String> escludi) {
+        return trovaMigliorAttacco(colore, miei, mappa, obj, escludi, 2.0, 1);
+    }
+
+    private AttaccoCandidate trovaMigliorAttacco(String colore, List<String> miei,
+                                                 Map<String, TerritoryState> mappa,
+                                                 ObiettivoTarget obj,
+                                                 Set<String> escludi,
+                                                 double moltiplicatoreSoglia,
+                                                 int turno) {
         AttaccoCandidate best = null;
 
         for (String mio : miei) {
             int mieArmate = mappa.get(mio).getArmate();
-            if (mieArmate <= MIN_ARMATE_DIFESA) continue;
+            if (mieArmate < 2) continue;
 
             for (String nemico : getConfinanti(mio)) {
+                if (escludi.contains(nemico)) continue;
+
                 TerritoryState st = mappa.get(nemico);
                 if (st == null || colore.equals(st.getColore())) continue;
 
                 int armateNemico = st.getArmate();
 
-                // Rapporto minimo dipende dalla forza del difensore:
-                //   difensore ≤ 4 → serve 2.5x  (es. 4 difesa → 10 attacco)
-                //   difensore > 4 → serve 2x+3   (es. 6 difesa → 15 attacco)
-                int minimoPerAttaccare = armateNemico <= 4
-                        ? (int) Math.ceil(armateNemico * 2.5)
-                        : armateNemico * 2 + 3;
+                // Soglia difensività: cresce con i turni (2x → 2.5x → 3x)
+                int minimoPerAttaccare = (int) Math.ceil(armateNemico * moltiplicatoreSoglia);
 
                 if (mieArmate < minimoPerAttaccare) continue;
 
-                int p = calcolaPrioritaAttacco(nemico, colore, st.getColore(), obj, mappa);
+                int p = calcolaPrioritaAttacco(nemico, colore, st.getColore(), obj, mappa, turno);
                 if (best == null || p > best.priorita())
                     best = new AttaccoCandidate(mio, nemico, p);
             }
@@ -607,34 +692,73 @@ public class AIPlayerService {
 
     private int calcolaPrioritaAttacco(String territorio, String colore,
                                        String coloreNemico, ObiettivoTarget obj,
-                                       Map<String, TerritoryState> mappa) {
+                                       Map<String, TerritoryState> mappa,
+                                       int turno) {
         int p = 0;
+        int armateNemico = mappa.get(territorio).getArmate();
 
-        // Priorità 1: blocca continente avversario quasi completato
-        if (staBlocandoContinente(territorio, coloreNemico, mappa)) p += 200;
+        // ── PRIORITÀ ASSOLUTA: territorio in obiettivo ───────────────────────
+        // Il bonus cresce con i turni: più passa il tempo più è urgente fare punti.
+        // Turni 1-10:  base 400
+        // Turni 11-20: base 550
+        // Turni 21+:   base 700 (endgame — solo i punti contano)
+        int bonusObiettivo;
+        if (turno <= 10)      bonusObiettivo = 400;
+        else if (turno <= 20) bonusObiettivo = 550;
+        else                  bonusObiettivo = 700;
 
-        // Priorità 2: territorio in obiettivo ad alto valore
         if (isInObiettivo(territorio, obj)) {
-            p += 100;
-            // Extra punti per valore (numero adiacenze = punti)
-            p += getConfinanti(territorio).size() * 5;
-        }
-
-        // Priorità 3: territorio strategico
-        if (TERRITORI_STRATEGICI.contains(territorio)) p += 40;
-
-        // Priorità 4: continente più piccolo nell'obiettivo
-        for (int i = 0; i < ORDINE_CONTINENTI.size(); i++) {
-            String cont = ORDINE_CONTINENTI.get(i);
-            List<String> terrCont = RisikoBoardData.CONTINENTI.getOrDefault(cont, List.of());
-            if (terrCont.contains(territorio) && isInObiettivoContinente(cont, obj)) {
-                p += (ORDINE_CONTINENTI.size() - i) * 10; // Oceania = priorità più alta
-                break;
+            p += bonusObiettivo;
+            p += getConfinanti(territorio).size() * 20;
+            if (TERRITORI_STRATEGICI.contains(territorio)) p += 80;
+            for (int i = 0; i < ORDINE_CONTINENTI.size(); i++) {
+                String cont = ORDINE_CONTINENTI.get(i);
+                List<String> terrCont = RisikoBoardData.CONTINENTI.getOrDefault(cont, List.of());
+                if (terrCont.contains(territorio) && isInObiettivoContinente(cont, obj)) {
+                    p += (ORDINE_CONTINENTI.size() - i) * 20;
+                    break;
+                }
             }
         }
 
-        // Malus: territorio con molte armate (rischioso)
-        p -= mappa.get(territorio).getArmate() * 3;
+        // ── PRIORITÀ 2: blocca continente avversario quasi completato ────────
+        // Scende ogni turno: nei turni finali non vale la pena distrarsi dal proprio obiettivo.
+        // Turni 1-10:  100
+        // Turni 11-20:  60
+        // Turni 21+:    20 (quasi irrilevante — focus solo sull'obiettivo)
+        int bonusContinente;
+        if (turno <= 10)      bonusContinente = 100;
+        else if (turno <= 20) bonusContinente = 60;
+        else                  bonusContinente = 20;
+
+        if (staBlocandoContinente(territorio, coloreNemico, mappa)) p += bonusContinente;
+
+        // ── PRIORITÀ 3: territorio con 1-3 armate → carta facile ────────────
+        // Bersaglio prioritario: pesca carta + toglie territorio debole al nemico
+        if      (armateNemico == 1) p += 180;
+        else if (armateNemico == 2) p += 140;
+        else if (armateNemico == 3) p += 80;
+
+        // ── PRIORITÀ EMERGENZA: recupera territori se sotto soglia minima ────
+        // Con < 9 territori i rinforzi scendono sotto 3 → qualsiasi conquista
+        // è utile per tornare sopra la soglia
+        long mieiTotali = mappa.values().stream()
+                .filter(st -> colore.equals(st.getColore())).count();
+        if (mieiTotali < 9) p += 400; // urgenza massima: supera quasi tutto
+
+        // ── PRIORITÀ 4: territorio strategico (fuori obiettivo) ─────────────
+        if (!isInObiettivo(territorio, obj) && TERRITORI_STRATEGICI.contains(territorio)) p += 40;
+
+        // Malus: armate difensore (rischioso attaccare posizioni forti)
+        p -= armateNemico * 3;
+
+        // ── Perturbazione casuale ±10% ───────────────────────────────────────
+        // Introduce variabilità nelle decisioni dell'AI: 5-10% delle mosse
+        // saranno "sorpresa" — l'AI non sceglie sempre il target ottimale.
+        if (p > 0) {
+            int noise = (int)(p * (RND.nextDouble() * 0.2 - 0.1)); // da -10% a +10%
+            p += noise;
+        }
 
         return p;
     }
@@ -648,26 +772,38 @@ public class AIPlayerService {
         int totPerseAtt = 0;
         int totPerseDif = 0;
 
-        // ── Multi-round con limite di sicurezza ───────────────────────────────
-        // Max 50 round per battaglia: evita lentezze con eserciti molto grandi
+        // ── Multi-round: ogni round = un lancio di dadi ─────────────────────
+        // Regole dadi:
+        //   Attaccante: max 3 dadi, ma al massimo (armate - MIN_ARMATE_DIFESA)
+        //               così non scende mai sotto il minimo strategico
+        //   Difensore:  max 3 dadi (house rule: 3, non 2 come nel classico)
+        //   Confronto:  coppie dal più alto; il dado più basso perde 1 armata
+        //   Parità:     vince sempre il difensore
         int round = 0;
-        while (da.getArmate() > MIN_ARMATE_DIFESA && verso.getArmate() > 0 && round++ < 50) {
-            int numAtt = Math.min(3, da.getArmate() - 1);
-            int numDif = Math.min(3, verso.getArmate());
+        // Combatte finché il difensore ha armate E l'attaccante ha almeno 2
+        // (regola: deve restare almeno 1 in caso di vittoria + 1 per la difesa del territorio)
+        while (da.getArmate() > MIN_ARMATE_DIFESA && verso.getArmate() > 0 && round++ < 100) {
+            // Dadi attaccante: massimo 3, deve lasciare almeno MIN_ARMATE_DIFESA
+            int numAtt = Math.min(3, da.getArmate() - 1); // lascia 1 in territorio (regola gioco, non MIN_ARMATE_DIFESA)
+            // Dadi difensore: massimo 2 (regola standard Risiko)
+            // Con 3v3, P(att vince dado) = 41.7% → il difensore vince sempre. Bug matematico.
+            // Con 3v2, P(att vince) ≈ 57% → l'attaccante ha un vantaggio reale.
+            int numDif = Math.min(2, verso.getArmate());
 
             int[] datiAtt = tiraDadiOrdinati(numAtt);
             int[] datiDif = tiraDadiOrdinati(numDif);
 
+            // Confronta dal più alto: min(att, dif) coppie
             int confronti = Math.min(numAtt, numDif);
             int perseAtt  = 0;
             int perseDif  = 0;
 
             for (int i = 0; i < confronti; i++) {
-                if (datiAtt[i] > datiDif[i]) perseDif++;
-                else perseAtt++;
+                if (datiAtt[i] > datiDif[i]) perseDif++; // attaccante vince la coppia
+                else                          perseAtt++; // parità → difensore vince
             }
 
-            da.setArmate(Math.max(MIN_ARMATE_DIFESA, da.getArmate() - perseAtt));
+            da.setArmate(da.getArmate() - perseAtt);
             verso.setArmate(Math.max(0, verso.getArmate() - perseDif));
             totPerseAtt += perseAtt;
             totPerseDif += perseDif;
@@ -695,6 +831,11 @@ public class AIPlayerService {
                     " su " + nom(att.verso()) +
                     " [att -" + totPerseAtt + ", dif -" + totPerseDif + "]");
         }
+
+        // Registra evento per il frontend (frecce SVG)
+        eventiAttaccoTurno.add(new EventoAttacco(
+                att.da(), att.verso(), colore, difensore, conquistato));
+
         return conquistato;
     }
 
@@ -894,6 +1035,7 @@ public class AIPlayerService {
 
         log.add("🤝 " + lbl(colore) + " accetta cartina da " + lbl(partner) +
                 " → conquista " + nom(territorio) + " (lascia " + MIN_ARMATE_DIFESA + ")");
+        eventiCartinaTurno.add(new EventoCartina(partner, colore, territorio));
 
         // Registra accordo
         accordiCartina.put(colore, partner);
@@ -951,6 +1093,7 @@ public class AIPlayerService {
 
         log.add("🤝 " + lbl(colore) + " offre cartina a " + lbl(partnerIdeale) +
                 " su " + nom(terrCartina) + " (2 armate)");
+        eventiCartinaTurno.add(new EventoCartina(colore, partnerIdeale, terrCartina));
     }
 
     /**
@@ -1043,7 +1186,7 @@ public class AIPlayerService {
      * Valuta e tenta la sdadata secondo le regole:
      * - La sdadata è disponibile SOLO dal turno 25 in poi
      * - Tira 2 dadi, somma ≤ soglia(turno) → sdadata riuscita → partita finita
-     * - Soglie: T25≤4, T26≤5, T27≤6, T28+≤7
+     * - Soglie: T35≤4, T36≤5, T37≤6, T38+≤7
      * - L'AI tenta SOLO se ha punteggio > massimo avversario stimato
      * - Non può tentare se ha conquistato >2 territori nel turno corrente
      *
@@ -1052,7 +1195,7 @@ public class AIPlayerService {
     public SdadataResult valutaSdadata(String colore, int obiettivoId, int turno,
                                        Map<String, TerritoryState> mappa) {
         // Condizione 0: sdadata disponibile solo dal turno 25
-        if (turno < 25) return null;
+        if (turno < 35) return null;
 
         // Condizione 1: ha conquistato troppo → non può sdadare
         int conquiste = territorConquistatiNelTurno.getOrDefault(colore, 0);
@@ -1067,7 +1210,7 @@ public class AIPlayerService {
         int dado1  = RND.nextInt(6) + 1;
         int dado2  = RND.nextInt(6) + 1;
         int totale = dado1 + dado2;
-        int soglia = switch (turno - 24) {  // turno 25 → fase 1, turno 26 → fase 2, ecc.
+        int soglia = switch (turno - 34) {  // turno 35 → fase 1, turno 36 → fase 2, ecc.
             case 1  -> 4;
             case 2  -> 5;
             case 3  -> 6;
