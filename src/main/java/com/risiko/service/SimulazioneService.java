@@ -74,7 +74,7 @@ public class SimulazioneService {
 
         Set<String> attivi      = new LinkedHashSet<>(Arrays.asList(COLORI));
         boolean     partitaFinita = false;
-
+        String vincitoreFinale = null;
         for (int t = 1; t <= turni && !partitaFinita; t++) {
 
             List<String> logTurnoCompleto = new ArrayList<>();
@@ -127,6 +127,13 @@ public class SimulazioneService {
                         attivi.remove(altro);
                     }
                 }
+                if (haCompletato(colore, obiettiviPerColore.get(colore), mappa)) {
+                    snapshots.add(creaSnapshot(t, mappa,
+                            List.of("⏱ La partita è terminata."),
+                            List.of(), Map.of(), List.of(), List.of(), "FINE", null));
+                    partitaFinita = true;
+                    break;
+                }
             }
 
             // ── FASE SDADATA (dal turno 35, ordine inverso di mano) ──────────────
@@ -146,6 +153,7 @@ public class SimulazioneService {
                             logSd.add("⏱ La partita è terminata.");
                             snapshots.add(creaSnapshot(t, mappa, logSd,
                                     List.of(), Map.of(), List.of(), List.of(), "SDADATA", colore));
+                            vincitoreFinale = calcolaVincitore(attivi, obiettiviPerColore, mappa);
                             partitaFinita = true;
                             break;
                         } else {
@@ -170,6 +178,7 @@ public class SimulazioneService {
 
                 if (attivi.size() == 1) {
                     String vincitore = attivi.iterator().next();
+                    vincitoreFinale = vincitore;
                     snapshots.add(creaSnapshot(t + 1, mappa,
                             List.of("🏆 " + lbl(vincitore) + " ha conquistato il mondo!"),
                             List.of(), Map.of(), List.of(), List.of(), "FINE", null));
@@ -178,6 +187,7 @@ public class SimulazioneService {
 
                 // Turno 45 = fine obbligatoria
                 if (t == 45 && !partitaFinita) {
+                    vincitoreFinale = calcolaVincitore(attivi, obiettiviPerColore, mappa);
                     snapshots.add(creaSnapshot(t, mappa,
                             List.of("⏱ Turno limite raggiunto. Simulazione terminata."),
                             List.of(), Map.of(), List.of(), List.of(), "FINE", null));
@@ -188,8 +198,7 @@ public class SimulazioneService {
 
 
 
-        return new NuovaSimulazioneDto(sim.getId(), turni, diff, snapshots);
-    }
+        return new NuovaSimulazioneDto(sim.getId(), turni, diff, snapshots, vincitoreFinale);    }
 
 // ── NUOVI METODI PRIVATI da aggiungere in SimulazioneService ───────────────
 
@@ -203,24 +212,37 @@ public class SimulazioneService {
         List<String> tutti = new ArrayList<>(RisikoBoardData.TUTTI_TERRITORI);
         Collections.shuffle(tutti, RANDOM);
 
-        // Quote casualizzate: 2 giocatori con 10, 2 con 11
         int[] quote = {10, 10, 11, 11};
 
-        // Assegna territori con 1 armata
+        // Cap: nessun giocatore può avere più della metà dei territori per continente
+        Map<String, Integer> limiti = new HashMap<>();
+        RisikoBoardData.CONTINENTI.forEach((cont, terr) ->
+                limiti.put(cont, terr.size() / 2));
+
         Map<String, TerritoryState> mappa = new LinkedHashMap<>();
         Map<String, List<String>>   territoriPerColore = new LinkedHashMap<>();
-        int idx = 0;
+        List<String> pool = new ArrayList<>(tutti);
+
         for (int p = 0; p < COLORI.length; p++) {
             String colore = COLORI[p];
             List<String> miei = new ArrayList<>();
-            for (int t = 0; t < quote[p]; t++) {
-                String terr = tutti.get(idx++);
-                mappa.put(terr, new TerritoryState(colore, 1));
-                miei.add(terr);
+            int target = quote[p];
+
+            while (miei.size() < target && !pool.isEmpty()) {
+                String scelto = null;
+                for (String terr : pool) {
+                    if (nonViolaCap(terr, miei, limiti)) {
+                        scelto = terr;
+                        break;
+                    }
+                }
+                if (scelto == null) scelto = pool.get(0); // fallback
+                pool.remove(scelto);
+                mappa.put(scelto, new TerritoryState(colore, 1));
+                miei.add(scelto);
             }
             territoriPerColore.put(colore, miei);
         }
-
         List<String> logPiazz = new ArrayList<>();
         logPiazz.add("⚑ PIAZZAMENTO INIZIALE — ogni giocatore distribuisce 30 carri");
         logPiazz.add("");
@@ -553,6 +575,74 @@ public class SimulazioneService {
     private String cap(String s) {
         return s == null || s.isEmpty() ? s : Character.toUpperCase(s.charAt(0)) + s.substring(1);
     }
+    private boolean haCompletato(String colore, int obiettivoId,
+                                 Map<String, TerritoryState> mappa) {
+        RisikoBoardData.ObiettivoTarget obj = RisikoBoardData.OBIETTIVI.get(obiettivoId);
+        if (obj == null) return false;
 
+        List<String> miei = aiService.getTerritoriGiocatore(colore, mappa);
 
+        // Obiettivo a territori specifici: li deve avere tutti
+        if (obj.territoriSpecifici() != null && !obj.territoriSpecifici().isEmpty()) {
+            return miei.containsAll(obj.territoriSpecifici());
+        }
+
+        // Obiettivo a continenti: deve controllare tutti i continenti target
+        if (obj.continentiTarget() != null && !obj.continentiTarget().isEmpty()) {
+            return obj.continentiTarget().stream().allMatch(cont -> {
+                List<String> tc = RisikoBoardData.CONTINENTI.getOrDefault(cont, List.of());
+                return miei.containsAll(tc);
+            });
+        }
+
+        // Obiettivo a numero minimo di territori
+        if (obj.minimoTerritoriTarget() > 0) {
+            return miei.size() >= obj.minimoTerritoriTarget();
+        }
+
+        return false;
+    }
+    private boolean nonViolaCap(String territorio, List<String> giàAssegnati,
+                                Map<String, Integer> limiti) {
+        for (Map.Entry<String, List<String>> ce : RisikoBoardData.CONTINENTI.entrySet()) {
+            if (!ce.getValue().contains(territorio)) continue;
+            long già = giàAssegnati.stream().filter(ce.getValue()::contains).count();
+            if (già >= limiti.get(ce.getKey())) return false;
+        }
+        return true;
+    }
+
+    private String calcolaVincitore(Set<String> attivi,
+                                    Map<String, Integer> obiettiviPerColore,
+                                    Map<String, TerritoryState> mappa) {
+        String[] ordine = {"BLU", "ROSSO", "VERDE", "GIALLO"};
+
+        return attivi.stream()
+                .max(Comparator
+                        .comparingInt((String colore) -> {
+                            int obId = obiettiviPerColore.getOrDefault(colore, -1);
+                            RisikoBoardData.ObiettivoTarget obj = RisikoBoardData.OBIETTIVI.get(obId);
+                            if (obj == null) return 0;
+                            return aiService.getTerritoriGiocatore(colore, mappa).stream()
+                                    .filter(t -> isInObiettivo(t, obj))
+                                    .mapToInt(t -> RisikoBoardData.ADIACENZE.getOrDefault(t, List.of()).size())
+                                    .sum();
+                        })
+                        .thenComparingInt((String colore) -> {
+                            int obId = obiettiviPerColore.getOrDefault(colore, -1);
+                            RisikoBoardData.ObiettivoTarget obj = RisikoBoardData.OBIETTIVI.get(obId);
+                            if (obj == null) return 0;
+                            return aiService.getTerritoriGiocatore(colore, mappa).stream()
+                                    .filter(t -> !isInObiettivo(t, obj))
+                                    .mapToInt(t -> RisikoBoardData.ADIACENZE.getOrDefault(t, List.of()).size())
+                                    .sum();
+                        })
+                        .thenComparingInt((String colore) -> {
+                            for (int i = 0; i < ordine.length; i++)
+                                if (ordine[i].equals(colore)) return i;
+                            return 0;
+                        })
+                )
+                .orElse(null);
+    }
 }
