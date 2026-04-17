@@ -723,24 +723,43 @@ public class AIPlayerService {
                 } else {
                     // Poi prendi da qualsiasi territorio con più di 3 armate
                     // (interni prima, poi confine — l'importante è proteggere l'obiettivo)
-                    // In sdadata non scendere sotto 3 rubando armate
-                    int minimoFonte = (turno >= 35) ? 3 : 1;
-                    for (String fonte : miei) {
-                        if (fonte.equals(t)) continue;
-                        if (mappa.get(fonte).getArmate() <= Math.max(3, minimoFonte)) continue;
-                        mappa.get(fonte).setArmate(mappa.get(fonte).getArmate() - 1);
-                        mappa.get(t).setArmate(mappa.get(t).getArmate() + 1);
+                    // Ruba armate in ordine di priorità:
+                    // 1. Da territori interni con più armate (fuori obiettivo prima)
+                    // 2. Da territori di confine fuori obiettivo con >2 armate
+                    // 3. In sdadata: anche da territori fuori obiettivo con >1
+                    // L'obiettivo è SEMPRE prioritario su tutto il resto.
+
+                    // Ordina fonti: prima fuori obiettivo (sacrificabili), poi per armate decrescenti
+                    List<String> fontiOrdinate = miei.stream()
+                            .filter(s -> !s.equals(t))
+                            .sorted(Comparator
+                                    .comparingInt((String s) -> isInObiettivo(s, obj) ? 1 : 0)
+                                    .thenComparingInt((String s) -> -mappa.get(s).getArmate()))
+                            .collect(Collectors.toList());
+
+                    for (String fonte : fontiOrdinate) {
                         if (mappa.get(t).getArmate() >= target) break;
-                    }
-                    if (mappa.get(t).getArmate() < target && turno < 35) {
-                        // Solo pre-sdadata: usa anche armate fuori obiettivo con >1
-                        for (String fonte : miei) {
-                            if (fonte.equals(t) || isInObiettivo(fonte, obj)) continue;
-                            if (mappa.get(fonte).getArmate() <= 1) continue;
-                            mappa.get(fonte).setArmate(mappa.get(fonte).getArmate() - 1);
-                            mappa.get(t).setArmate(mappa.get(t).getArmate() + 1);
-                            if (mappa.get(t).getArmate() >= target) break;
+                        int armateFonte = mappa.get(fonte).getArmate();
+                        boolean fonteInObj = isInObiettivo(fonte, obj);
+                        int adjFonte = getConfinanti(fonte).size();
+
+                        // Minimo da lasciare:
+                        // - Altra fonte in obiettivo: non scende sotto 3 (ha già la protezione)
+                        // - Fuori obiettivo con confini nemici: lascia 1 (l'obiettivo è più importante)
+                        // - Fuori obiettivo in nicchia: può scendere a 1
+                        int minimoFonte;
+                        if (fonteInObj) {
+                            // Non indebolire altri obiettivi sotto il loro minimo (3)
+                            minimoFonte = 3;
+                        } else {
+                            // Fuori obiettivo: lascia sempre almeno 1
+                            minimoFonte = 1;
                         }
+                        int disponibile = armateFonte - minimoFonte;
+                        if (disponibile <= 0) continue;
+                        int prendi = Math.min(disponibile, target - mappa.get(t).getArmate());
+                        mappa.get(fonte).setArmate(armateFonte - prendi);
+                        mappa.get(t).setArmate(mappa.get(t).getArmate() + prendi);
                     }
                 }
                 if (mappa.get(t).getArmate() >= target) {
@@ -909,48 +928,91 @@ public class AIPlayerService {
             }
         }
 
-        // ── FASE 0b2: difendi ingressi di continenti già chiusi ─────────────
-        // Se il giocatore controlla un intero continente, difende i suoi ingressi
-        // (territori del continente adiacenti a nemici) con:
-        // min = armate nemiche adiacenti + 5, max = 25
-        // Priorità altissima: perdere 1 territorio = perdere il bonus continente.
+        // ── FASE 0b2: difendi ingressi di continenti già chiusi (ricorsivo) ──
+        // Se il giocatore controlla un intero continente, difende ricorsivamente
+        // tutti i territori "esposti": prima i diretti (con nemici adiacenti),
+        // poi quelli che proteggono le nicchie, e così via.
+        // La logica: trova tutti i territori del continente con nemici raggiungibili
+        // attraverso una catena di territori propri — ognuno va difeso
+        // con min = armateNemicheRaggiungibili + 5 (decrescente con la distanza).
         for (Map.Entry<String, List<String>> ce : RisikoBoardData.CONTINENTI.entrySet()) {
             List<String> tc = ce.getValue();
             boolean controlloTotale = tc.stream().allMatch(t ->
                     colore.equals(mappa.getOrDefault(t, new TerritoryState("?",0)).getColore()));
             if (!controlloTotale) continue;
 
-            for (String ingresso : tc) {
-                boolean haConfineNemico = getConfinanti(ingresso).stream()
-                        .anyMatch(adj -> {
-                            TerritoryState st = mappa.getOrDefault(adj, new TerritoryState("?",0));
-                            return !colore.equals(st.getColore()) && !"?".equals(st.getColore());
-                        });
-                if (!haConfineNemico) continue;
+            // Cap ingresso: per continenti a basso valore (Oceania, SA, Africa)
+            // scende proporzionalmente con i turni — a fine partita non vale
+            // la pena difenderli a tutti i costi (meglio investire sull'obiettivo).
+            // Nord America, Europa, Asia: cap fisso (alto valore strategico).
+            int capIngresso;
+            switch (ce.getKey()) {
+                case "nordamerica", "europa", "asia" -> capIngresso = 20;
+                case "africa" -> {
+                    // Africa: parte da 15 e scende a 8 al turno 34
+                    capIngresso = Math.max(8, 15 - (turno / 3));
+                }
+                default -> {
+                    // Oceania, Sud America: parte da 12 e scende a 5 al turno 34
+                    capIngresso = Math.max(5, 12 - (turno / 3));
+                }
+            }
 
-                int armateNemicheAdj = getConfinanti(ingresso).stream()
-                        .filter(adj -> {
-                            TerritoryState st = mappa.getOrDefault(adj, new TerritoryState("?",0));
-                            return !colore.equals(st.getColore()) && !"?".equals(st.getColore());
-                        })
-                        .mapToInt(adj -> mappa.get(adj).getArmate()).sum();
+            // Per ogni territorio del continente, calcola la "pressione nemica
+            // effettiva" considerando la distanza dai nemici reali.
+            // distanza 0 = adiacente diretto ai nemici
+            // distanza 1 = adiacente a chi è adiacente ai nemici (protegge nicchia)
+            // ecc. La pressione diminuisce con la distanza.
+            for (int distanza = 0; distanza <= 3; distanza++) {
+                final int dist = distanza;
+                for (String t : tc) {
+                    if (rim <= 0) break;
 
-                // Cap ingresso: proporzionale al valore del continente
-                // Sud America/Oceania: max 12, Africa: max 15, NA/EU/Asia: max 20
-                int capIngresso = switch (ce.getKey()) {
-                    case "nordamerica", "europa", "asia" -> 20;
-                    case "africa" -> 15;
-                    default -> 12; // sudamerica, oceania — basso valore
-                };
-                int minimoIngresso = Math.min(armateNemicheAdj + 5, capIngresso);
-                int attuale = mappa.get(ingresso).getArmate();
+                    // Trova la pressione nemica alla distanza corrente
+                    // (BFS semplice: espandi i territori propri per dist passi)
+                    Set<String> frontiera = new HashSet<>();
+                    frontiera.add(t);
+                    for (int d = 0; d < dist; d++) {
+                        Set<String> nuova = new HashSet<>();
+                        for (String f : frontiera) {
+                            getConfinanti(f).stream()
+                                    .filter(adj -> colore.equals(
+                                            mappa.getOrDefault(adj, new TerritoryState("?",0)).getColore()))
+                                    .forEach(nuova::add);
+                        }
+                        frontiera.addAll(nuova);
+                    }
 
-                if (attuale < minimoIngresso && rim > 0) {
-                    int aggiunti = Math.min(minimoIngresso - attuale, rim);
-                    mappa.get(ingresso).setArmate(attuale + aggiunti);
-                    rim -= aggiunti;
-                    log.add("🏰 " + lbl(colore) + " difende ingresso " + nom(ingresso) +
-                            " (" + attuale + "→" + (attuale + aggiunti) + " | max 25)");
+                    // Pressione = somma armate nemiche adiacenti alla frontiera
+                    int pressioneNem = frontiera.stream()
+                            .flatMap(f -> getConfinanti(f).stream())
+                            .distinct()
+                            .filter(adj -> {
+                                TerritoryState st = mappa.getOrDefault(adj, new TerritoryState("?",0));
+                                return !colore.equals(st.getColore()) && !"?".equals(st.getColore());
+                            })
+                            .mapToInt(adj -> mappa.get(adj).getArmate())
+                            .sum();
+
+                    if (pressioneNem == 0) continue; // nessuna minaccia raggiungibile
+
+                    // La difesa richiesta diminuisce con la distanza
+                    int margine = Math.max(1, 5 - dist * 1);
+                    int minimoT = Math.min(pressioneNem + margine, capIngresso);
+                    int attuale = mappa.get(t).getArmate();
+
+                    if (attuale < minimoT && rim > 0) {
+                        int aggiunti = Math.min(minimoT - attuale, rim);
+                        mappa.get(t).setArmate(attuale + aggiunti);
+                        rim -= aggiunti;
+                        if (dist > 0) {
+                            log.add("🏰 " + lbl(colore) + " difende pre-ingresso " + nom(t) +
+                                    " (dist=" + dist + ", " + attuale + "→" + (attuale + aggiunti) + ")");
+                        } else {
+                            log.add("🏰 " + lbl(colore) + " difende ingresso " + nom(t) +
+                                    " (" + attuale + "→" + (attuale + aggiunti) + ")");
+                        }
+                    }
                 }
             }
         }
@@ -1268,9 +1330,22 @@ public class AIPlayerService {
                     case 6       -> 14;
                     default      -> 16;
                 };
-                minimo = primiTurni ? Math.max(4, minimoBase / 2) : minimoBase + bonusPeso;
+                // Bonus progressivo: dal turno 20, ogni 3 turni +1 per punto di valore
+                // Territorio da 6pt al T30 → faseTurno=3, bonus=3*(6-2)=12 → min=14+12=26 (cap 25)
+                // Territorio da 4pt al T27 → faseTurno=2, bonus=2*(4-2)=4 → min=10+4=14
+                int bonusTurno = 0;
+                if (!primiTurni && turno >= 20) {
+                    int faseTurno = (turno - 20) / 3;
+                    bonusTurno = faseTurno * Math.max(0, adiacenze - 2);
+                }
+                minimo = primiTurni ? Math.max(4, minimoBase / 2)
+                        : Math.min(minimoBase + bonusPeso + bonusTurno, 25);
             } else {
-                minimo = primiTurni ? 3 : 4 + bonusPeso;
+                // Fuori obiettivo: dal turno 25, +1 ogni 5 turni se territorio ≥4 punti
+                int adjFuori = getConfinanti(t).size();
+                int bonusTurnoFuori = (!primiTurni && turno >= 25 && adjFuori >= 4)
+                        ? (turno - 25) / 5 : 0;
+                minimo = primiTurni ? 3 : Math.min(4 + bonusPeso + bonusTurnoFuori, 12);
             }
 
             if (attuale < minimo) {
@@ -1473,6 +1548,51 @@ public class AIPlayerService {
             if (idxExtra >= ord.size()) break; // evita loop infinito
         }
         log.add("🛡 " + lbl(colore) + " piazza " + rinforzi + " armate su " + nom(principale));
+
+        // ── REGOLA FINALE: nessun territorio lasciato a 2 armate se evitabile ──
+        // Scansiona tutti i territori a 2 armate (escluso quello cartina).
+        // Se c'è un altro territorio con >3 armate, prende 1 armata da lì.
+        // Non tocca territori in nicchia con poche adiacenze (già al sicuro).
+        String terrCartinaFin = territoriCartina.getOrDefault(colore, null);
+        for (String t : new ArrayList<>(miei)) {
+            if (t.equals(terrCartinaFin)) continue; // solo il territorio cartina può restare a 2
+            if (mappa.get(t).getArmate() != 2) continue;
+
+            // Se è in nicchia con <5 adiacenze: ok a 2 (non è a rischio)
+            boolean inNicchiaFin = getConfinanti(t).stream().allMatch(a ->
+                    colore.equals(mappa.getOrDefault(a, new TerritoryState("?",0)).getColore()));
+            if (inNicchiaFin && getConfinanti(t).size() < 5) continue;
+
+            // Cerca un territorio da cui prendere 1 armata
+            miei.stream()
+                    .filter(s -> !s.equals(t))
+                    .filter(s -> mappa.get(s).getArmate() > 3)
+                    .max(Comparator.comparingInt(s -> mappa.get(s).getArmate()))
+                    .ifPresent(fonte -> {
+                        mappa.get(fonte).setArmate(mappa.get(fonte).getArmate() - 1);
+                        mappa.get(t).setArmate(3);
+                    });
+        }
+
+        // ── CAP FINALE ASSOLUTO: nessun territorio supera 35 armate ─────────
+        // Eccezione: se in quel turno sta per attaccare un territorio adiacente,
+        // può superare 35 ma mai superare CAP_ARMATE_TERRITORIO.
+        // Questa regola è l'ultima eseguita — sovrascrive tutto.
+        for (String t : miei) {
+            int att = mappa.get(t).getArmate();
+            if (att <= 35) continue;
+            // Controlla se sta per attaccare un territorio adiacente questo turno
+            boolean preparaAttacco = getConfinanti(t).stream()
+                    .anyMatch(adj -> {
+                        TerritoryState st = mappa.getOrDefault(adj, new TerritoryState("?",0));
+                        return !colore.equals(st.getColore()) && !"?".equals(st.getColore());
+                    });
+            if (!preparaAttacco) {
+                // Riduce a 35 e restituisce l'eccesso ai rinforzi del prossimo ciclo
+                // (non si può fare nulla qui, semplicemente capita)
+                mappa.get(t).setArmate(35);
+            }
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1607,6 +1727,53 @@ public class AIPlayerService {
             if (urgenzaSdadata > 200) {
                 moltiplicatoreSoglia = Math.max(1.5, moltiplicatoreSoglia - 0.5);
                 maxAttacchi = Math.min(maxAttacchi + 1, 5);
+            }
+        }
+
+        // ── ATTACCO PRIORITÀ ASSOLUTA: obiettivo nemico indifeso ────────────
+        // Se un territorio in obiettivo del nemico ha <6 armate E il nostro
+        // territorio adiacente ha ≥ soglia×armateNemiche → attacca subito.
+        // Soglia base: 3.5x
+        // Si abbassa dopo il turno 30: -0.1x ogni turno oltre il 30
+        // Si abbassa anche per territori di alto valore: -0.1x per ogni adj oltre 4
+        // In ogni caso la soglia minima è 2.0x
+        if (turno < 35) {
+            List<String> mieiOra = getTerritoriGiocatore(colore, mappa);
+            outer2:
+            for (String mio : mieiOra) {
+                int mieArmate = mappa.get(mio).getArmate();
+                if (mieArmate < 4) continue; // non attaccare con troppo poco
+                for (String nemico : getConfinanti(mio)) {
+                    TerritoryState stNem = mappa.get(nemico);
+                    if (stNem == null || colore.equals(stNem.getColore())) continue;
+
+                    // Il territorio nemico deve essere in obiettivo del suo proprietario
+                    String coloreNem = stNem.getColore();
+                    int obAvv = inferencer.getObiettivoPiuProbabile(coloreNem);
+                    RisikoBoardData.ObiettivoTarget objAvv = RisikoBoardData.OBIETTIVI.get(obAvv);
+                    if (objAvv == null || !isInObiettivo(nemico, objAvv)) continue;
+
+                    int armNem = stNem.getArmate();
+                    if (armNem == 0 || armNem >= 6) continue; // solo se indifeso (<6)
+
+                    // Calcola soglia dinamica
+                    int adjNem = getConfinanti(nemico).size();
+                    double sogliaBase = 3.5;
+                    // Abbassa per turni avanzati (dopo T30)
+                    if (turno > 30) sogliaBase -= (turno - 30) * 0.1;
+                    // Abbassa per territorio di valore (ogni adj oltre 4 = -0.1x)
+                    sogliaBase -= Math.max(0, adjNem - 4) * 0.1;
+                    sogliaBase = Math.max(2.0, sogliaBase); // minimo 2.0x
+
+                    double ratio = (double) mieArmate / armNem;
+                    if (ratio >= sogliaBase) {
+                        log.add("🎯 " + lbl(colore) + " attacca obiettivo indifeso " +
+                                nom(nemico) + " (" + String.format("%.1f", ratio) + "x ≥ " +
+                                String.format("%.1f", sogliaBase) + "x)");
+                        eseguiAttacco(new AttaccoCandidate(mio, nemico, 9999), mappa, log, colore);
+                        break outer2;
+                    }
+                }
             }
         }
 
@@ -2592,12 +2759,14 @@ public class AIPlayerService {
         List<String> lorTerritori = getTerritoriGiocatore(partner, mappa);
 
         // Trova un nuovo territorio fuori obiettivo adiacente al partner
+        // REGOLE ASSOLUTE: mai in obiettivo, mai con ≥6 adiacenze
         Optional<String> nuovaCartina = miei.stream()
-                .filter(t -> !isInObiettivo(t, obj))
+                .filter(t -> !isInObiettivo(t, obj))              // mai in obiettivo
+                .filter(t -> getConfinanti(t).size() < 6)          // mai ≥6 punti
                 .filter(t -> !TERRITORI_STRATEGICI.contains(t))
                 .filter(t -> mappa.get(t).getArmate() > MIN_ARMATE_DIFESA + 1)
                 .filter(t -> getConfinanti(t).stream().anyMatch(lorTerritori::contains))
-                .filter(t -> !t.equals(territoriCartina.get(colore))) // territorio diverso dal precedente
+                .filter(t -> !t.equals(territoriCartina.get(colore)))
                 .max(Comparator.comparingInt(t -> mappa.get(t).getArmate()));
 
         if (nuovaCartina.isEmpty()) return;
@@ -2912,4 +3081,3 @@ public class AIPlayerService {
         return Character.toUpperCase(s.charAt(0)) + s.substring(1);
     }
 }
-    

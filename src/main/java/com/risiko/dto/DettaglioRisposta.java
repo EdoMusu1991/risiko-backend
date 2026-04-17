@@ -5,5 +5,7 @@ public record DettaglioRisposta(
         int     risposta,
         int     obiettivoReale,
         String  nomeObiettivoReale,
-        boolean corretta
+        boolean corretta,
+        int     puntiInObiettivo,    // ← NUOVO
+        int     puntiFuoriObiettivo  // ← NUOVO
 ) {}

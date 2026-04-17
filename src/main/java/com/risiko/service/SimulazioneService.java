@@ -195,6 +195,29 @@ public class SimulazioneService {
                 }
             }
         }
+        for (String colore : COLORI) {
+            int obId = obiettiviPerColore.get(colore);
+            RisikoBoardData.ObiettivoTarget obj = RisikoBoardData.OBIETTIVI.get(obId);
+            List<String> mieiFinali = aiService.getTerritoriGiocatore(colore, mappa);
+
+            int inObj = mieiFinali.stream()
+                    .filter(t -> isInObiettivo(t, obj))
+                    .mapToInt(t -> RisikoBoardData.ADIACENZE.getOrDefault(t, List.of()).size())
+                    .sum();
+            int fuoriObj = mieiFinali.stream()
+                    .filter(t -> !isInObiettivo(t, obj))
+                    .mapToInt(t -> RisikoBoardData.ADIACENZE.getOrDefault(t, List.of()).size())
+                    .sum();
+
+            giocatoreRepo.findBySimulazioneId(sim.getId()).stream()
+                    .filter(g -> colore.equals(g.getColore()))
+                    .findFirst()
+                    .ifPresent(g -> {
+                        g.setPuntiInObiettivo(inObj);
+                        g.setPuntiFuoriObiettivo(fuoriObj);
+                        giocatoreRepo.save(g);
+                    });
+        }
 
 
 
@@ -439,8 +462,12 @@ public class SimulazioneService {
             boolean ok   = segreto == risposta;
             if (ok) corretti++;
             String nome = Optional.ofNullable(RisikoBoardData.OBIETTIVI.get(segreto))
-                .map(ObiettivoTarget::nome).orElse("?");
-            dettagli.add(new DettaglioRisposta(colore, risposta, segreto, nome, ok));
+                    .map(ObiettivoTarget::nome).orElse("?");
+            GiocatoreSimulato giocat = giocatori.stream()
+                    .filter(g -> colore.equals(g.getColore())).findFirst().orElse(null);
+            int puntiIn    = giocat != null ? giocat.getPuntiInObiettivo() : 0;
+            int puntiFuori = giocat != null ? giocat.getPuntiFuoriObiettivo() : 0;
+            dettagli.add(new DettaglioRisposta(colore, risposta, segreto, nome, ok, puntiIn, puntiFuori));
         }
 
         long hintUsati = hintRepo.countBySimulazioneId(simId);

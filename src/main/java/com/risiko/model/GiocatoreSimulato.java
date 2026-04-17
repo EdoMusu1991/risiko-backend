@@ -15,6 +15,9 @@ public class GiocatoreSimulato {
     private SimulazionePartita simulazione;
 
     private String colore;
+    private int puntiInObiettivo = 0;
+    private int puntiFuoriObiettivo = 0;
+    // + getter e setter
 
     @Column(name = "obiettivo_id")
     private int obiettivoId;
@@ -27,4 +30,8 @@ public class GiocatoreSimulato {
     public void setColore(String colore)             { this.colore = colore; }
     public int getObiettivoId()                      { return obiettivoId; }
     public void setObiettivoId(int obiettivoId)      { this.obiettivoId = obiettivoId; }
+    public int getPuntiInObiettivo()                   { return puntiInObiettivo; }
+    public void setPuntiInObiettivo(int p)             { this.puntiInObiettivo = p; }
+    public int getPuntiFuoriObiettivo()                { return puntiFuoriObiettivo; }
+    public void setPuntiFuoriObiettivo(int p){ this.puntiFuoriObiettivo = p; }
 }
