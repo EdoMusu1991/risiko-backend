@@ -142,6 +142,30 @@ public class AIPlayerService {
             int dado1, int dado2, int totale, int soglia) {}
 
     // ═══════════════════════════════════════════════════════════════════════════
+    //  RESET STATO (FIX: singleton Spring con stato mutabile)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Resetta tutto lo stato interno del servizio.
+     * DEVE essere chiamato da SimulazioneService.generaSimulazione()
+     * all'inizio di ogni nuova simulazione. Senza questo reset, lo stato
+     * della simulazione precedente (mani carte, accordi cartina, armature,
+     * inferencer) si propaga a quella nuova perché Spring riusa l'istanza.
+     */
+    public void resetStatoInterno() {
+        maniCarte.clear();
+        territorConquistatiNelTurno.clear();
+        accordiCartina.clear();
+        territoriCartina.clear();
+        armaturePrecedenti.clear();
+        turniTerritorioScoperto.clear();
+        turnoOffertaCartina.clear();
+        eventiAttaccoTurno.clear();
+        eventiCartinaTurno.clear();
+        eventiTrisTurno.clear();
+        inferencerInizializzato = false;
+    }
+    // ═══════════════════════════════════════════════════════════════════════════
     //  DISTRIBUZIONE INIZIALE (NUOVO — vincolo max metà continente)
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -395,11 +419,19 @@ public class AIPlayerService {
         return new TurnoResult(logTot, sdadata, att, sc, cart, tris);
     }
 
-    /** Snapshot dello stato carte attuale di tutti i giocatori. */
+    /**
+     * Snapshot dello stato carte di tutti i giocatori.
+     * FIX: emette SEMPRE tutti e 4 i colori con zero di default.
+     * Prima iterava solo le entry presenti in maniCarte, quindi chi non
+     * aveva ancora pescato non compariva nel DTO e il frontend riceveva
+     * undefined per quel colore.
+     */
     private Map<String, StatoCarte> buildStatoCarteCorrente() {
-        Map<String, StatoCarte> result = new HashMap<>();
-        maniCarte.forEach((c, mano) -> {
-            int f=0,ca=0,k=0,j=0;
+        String[] colori = {"BLU", "ROSSO", "VERDE", "GIALLO"};
+        Map<String, StatoCarte> result = new LinkedHashMap<>();
+        for (String c : colori) {
+            List<Carta> mano = maniCarte.getOrDefault(c, List.of());
+            int f = 0, ca = 0, k = 0, j = 0;
             for (Carta carta : mano) {
                 switch (carta.simbolo()) {
                     case FANTE   -> f++;
@@ -409,7 +441,7 @@ public class AIPlayerService {
                 }
             }
             result.put(c, new StatoCarte(f, ca, k, j));
-        });
+        }
         return result;
     }
 
@@ -694,80 +726,99 @@ public class AIPlayerService {
         List<String> confine = getTerritoriBordoNemico(colore, miei, mappa);
         if (confine.isEmpty()) confine = miei;
 
-        // ── FASE ASSOLUTA: territori in obiettivo mai a 1-2 armate (salvo nicchia) ──
-        // Questa è la regola più assoluta di tutte — vale a qualsiasi turno,
-        // prima di qualsiasi altra considerazione strategica.
-        // L'Ucraina a 2 armate in sdadata è inaccettabile.
+        // ── FASE ASSOLUTA: difendi SEMPRE i territori in obiettivo ──────────
+        // Regola fondamentale: un territorio in obiettivo non viene mai lasciato
+        // indifeso se si può fare qualcosa. Il target minimo dipende da:
+        // - Adiacenze (valore del territorio)
+        // - Turno (più avanti = più difesa)
+        // - Nicchia (piccoli in nicchia: meno stringente)
+        // Questa fase ruba da qualsiasi fuori-obiettivo pur di raggiungere il target.
         {
             for (String t : new ArrayList<>(miei)) {
                 if (!isInObiettivo(t, obj)) continue;
-                if (mappa.get(t).getArmate() > 2) continue;
 
-                // Nicchia = normalmente al sicuro, MA non per territori in obiettivo
-                // con ≥5 adiacenze (troppo preziosi — se la nicchia si rompe sono esposti)
-                boolean nicchia = getConfinanti(t).stream().allMatch(adj ->
-                        colore.equals(mappa.getOrDefault(adj, new TerritoryState("?",0)).getColore()));
-                int adj = getConfinanti(t).size();
-                if (nicchia && adj < 5) continue; // piccoli in nicchia: ok a 1-2
+                boolean nicchia = getConfinanti(t).stream().allMatch(a ->
+                        colore.equals(mappa.getOrDefault(a, new TerritoryState("?",0)).getColore()));
+                int adjT = getConfinanti(t).size();
 
-                // Territorio in obiettivo con ≥5 punti: minimo proporzionale al valore
-                // anche in nicchia (se la nicchia si rompe deve poter resistere)
-                int adjT2 = getConfinanti(t).size();
-                int target = adjT2 >= 6 ? 10 : adjT2 >= 5 ? 8 : 3;
-                int mancanti = target - mappa.get(t).getArmate();
+                // Target minimo in obiettivo:
+                // In nicchia con <5 adj: 3 (al sicuro)
+                // In nicchia con ≥5 adj: 8-10 (troppo prezioso)
+                // Fuori nicchia: scala con adiacenze + bonus turno
+                int target;
+                if (nicchia && adjT < 5) {
+                    target = 3;
+                } else if (nicchia) {
+                    target = adjT >= 6 ? 10 : 8;
+                } else {
+                    // Fuori nicchia: scala con valore e turno
+                    int base = switch (adjT) {
+                        case 1, 2, 3 -> 6;
+                        case 4       -> 8;
+                        case 5       -> 10;
+                        case 6       -> 12;
+                        default      -> 14;
+                    };
+                    // Bonus progressivo dal turno 15
+                    int bonusTurno = turno >= 15 ? Math.min(8, (turno - 15) / 3) : 0;
+                    target = Math.min(base + bonusTurno, 25);
+                }
+
+                int attuale = mappa.get(t).getArmate();
+                if (attuale >= target) continue;
+
+                int mancanti = target - attuale;
 
                 // Prima usa i rinforzi disponibili
                 if (rim >= mancanti) {
                     mappa.get(t).setArmate(target);
                     rim -= mancanti;
-                } else {
-                    // Poi prendi da qualsiasi territorio con più di 3 armate
-                    // (interni prima, poi confine — l'importante è proteggere l'obiettivo)
-                    // Ruba armate in ordine di priorità:
-                    // 1. Da territori interni con più armate (fuori obiettivo prima)
-                    // 2. Da territori di confine fuori obiettivo con >2 armate
-                    // 3. In sdadata: anche da territori fuori obiettivo con >1
-                    // L'obiettivo è SEMPRE prioritario su tutto il resto.
+                    continue;
+                } else if (rim > 0) {
+                    mappa.get(t).setArmate(attuale + rim);
+                    attuale += rim;
+                    rim = 0;
+                }
 
-                    // Ordina fonti: prima fuori obiettivo (sacrificabili), poi per armate decrescenti
-                    List<String> fontiOrdinate = miei.stream()
-                            .filter(s -> !s.equals(t))
-                            .sorted(Comparator
-                                    .comparingInt((String s) -> isInObiettivo(s, obj) ? 1 : 0)
-                                    .thenComparingInt((String s) -> -mappa.get(s).getArmate()))
+                // Poi ruba da fuori-obiettivo (sacrificabili) in ordine decrescente di armate
+                List<String> fonti = miei.stream()
+                        .filter(s -> !s.equals(t) && !isInObiettivo(s, obj))
+                        .sorted(Comparator.comparingInt((String s) -> -mappa.get(s).getArmate()))
+                        .collect(Collectors.toList());
+
+                for (String fonte : fonti) {
+                    if (mappa.get(t).getArmate() >= target) break;
+                    int disponibile = mappa.get(fonte).getArmate() - 1; // lascia 1
+                    if (disponibile <= 0) continue;
+                    int prendi = Math.min(disponibile, target - mappa.get(t).getArmate());
+                    mappa.get(fonte).setArmate(mappa.get(fonte).getArmate() - prendi);
+                    mappa.get(t).setArmate(mappa.get(t).getArmate() + prendi);
+                }
+
+                // Se ancora sotto target, ruba da altri obiettivi con surplus
+                if (mappa.get(t).getArmate() < target) {
+                    List<String> fontiObj = miei.stream()
+                            .filter(s -> !s.equals(t) && isInObiettivo(s, obj))
+                            .filter(s -> mappa.get(s).getArmate() > target + 2) // surplus
+                            .sorted(Comparator.comparingInt((String s) -> -mappa.get(s).getArmate()))
                             .collect(Collectors.toList());
-
-                    for (String fonte : fontiOrdinate) {
+                    for (String fonte : fontiObj) {
                         if (mappa.get(t).getArmate() >= target) break;
-                        int armateFonte = mappa.get(fonte).getArmate();
-                        boolean fonteInObj = isInObiettivo(fonte, obj);
-                        int adjFonte = getConfinanti(fonte).size();
-
-                        // Minimo da lasciare:
-                        // - Altra fonte in obiettivo: non scende sotto 3 (ha già la protezione)
-                        // - Fuori obiettivo con confini nemici: lascia 1 (l'obiettivo è più importante)
-                        // - Fuori obiettivo in nicchia: può scendere a 1
-                        int minimoFonte;
-                        if (fonteInObj) {
-                            // Non indebolire altri obiettivi sotto il loro minimo (3)
-                            minimoFonte = 3;
-                        } else {
-                            // Fuori obiettivo: lascia sempre almeno 1
-                            minimoFonte = 1;
-                        }
-                        int disponibile = armateFonte - minimoFonte;
-                        if (disponibile <= 0) continue;
-                        int prendi = Math.min(disponibile, target - mappa.get(t).getArmate());
-                        mappa.get(fonte).setArmate(armateFonte - prendi);
+                        int surplus = mappa.get(fonte).getArmate() - target; // lascia il target all'altro
+                        if (surplus <= 0) continue;
+                        int prendi = Math.min(surplus, target - mappa.get(t).getArmate());
+                        mappa.get(fonte).setArmate(mappa.get(fonte).getArmate() - prendi);
                         mappa.get(t).setArmate(mappa.get(t).getArmate() + prendi);
                     }
                 }
-                if (mappa.get(t).getArmate() >= target) {
+
+                if (mappa.get(t).getArmate() > attuale) {
                     log.add("🔒 " + lbl(colore) + " protegge obiettivo " + nom(t) +
-                            " → " + mappa.get(t).getArmate() + " armate (ASSOLUTO)");
+                            " → " + mappa.get(t).getArmate() + " armate (target=" + target + ")");
                 }
             }
         }
+        if (rim <= 0) { log.add("🛡 " + lbl(colore) + " piazza " + rinforzi + " armate"); return; }
 
         // ── FASE CRITICA: difesa prioritaria se il bot è a 9-10 territori ────
         // Scendere sotto 9 territori è molto grave (rinforzi < 3).
@@ -1414,18 +1465,37 @@ public class AIPlayerService {
         List<String> ord = ordine.stream().distinct().collect(Collectors.toList());
         if (ord.isEmpty()) ord = miei;
 
-        // Dal turno 35: riordina mettendo PRIMA i territori in obiettivo
-        // con meno armate — massimizza il punteggio per la sdadata.
+        // Dal turno 35: riordina per massimizzare il punteggio finale.
+        // Stima i punti di tutti gli avversari e decide dove concentrare.
+        // Se sono indietro nei punti → concentra sui territori mancanti in obiettivo.
+        // Se sono avanti → difende i territori già acquisiti.
         if (turno >= 35) {
+            int mioScore = calcolaPunteggioAttuale(colore, obiettivoId, mappa);
+            int maxAvvScore = getMassimoPunteggioAvversari(colore, mappa);
+            boolean sonoIndietro = mioScore < maxAvvScore;
+
+            // Ordina i territori in obiettivo per valore (adiacenze) decrescente
+            // Se indietro: prima quelli con meno armate (da rinforzare urgentemente)
+            // Se avanti: prima quelli con più armate (consolida la posizione)
             List<String> inObiettivo = ord.stream()
                     .filter(t -> isInObiettivo(t, obj))
-                    .sorted(Comparator.comparingInt(t -> mappa.get(t).getArmate()))
+                    .sorted(sonoIndietro
+                            // Indietro: prima i più scoperti (meno armate = più urgenti)
+                            ? Comparator.comparingInt((String t) -> mappa.get(t).getArmate())
+                            // Avanti: prima i più preziosi (più punti = più da difendere)
+                            : Comparator.comparingInt((String t) -> -getConfinanti(t).size()))
                     .collect(Collectors.toList());
             List<String> fuoriObiettivo = ord.stream()
                     .filter(t -> !isInObiettivo(t, obj))
                     .collect(Collectors.toList());
             ord = new ArrayList<>(inObiettivo);
             ord.addAll(fuoriObiettivo);
+
+            // Log della situazione punteggio
+            if (!inObiettivo.isEmpty()) {
+                log.add("📊 " + lbl(colore) + " punteggio: " + mioScore + "pt (max avv: " +
+                        maxAvvScore + "pt) → " + (sonoIndietro ? "recupero" : "consolida"));
+            }
         }
 
         // ── CAP 20 ARMATE: oltre 20 solo se pressione nemica ≥ 2x ────────────
@@ -1686,7 +1756,10 @@ public class AIPlayerService {
             // ══════════════════════════════════════════════════════════════════════
         } else {
             boolean sonoInVantaggio = punteggioMio > punteggioMaxAvv;
-            maxConquiste = sonoInVantaggio ? 2 : Integer.MAX_VALUE;
+            boolean sonoMoltoIndietro = distaccoDalLeader > 20;
+            // Se molto indietro nei punti → conquiste illimitate per recuperare
+            // Se in vantaggio → consolida, max 2 conquiste
+            maxConquiste = sonoInVantaggio ? 2 : (sonoMoltoIndietro ? Integer.MAX_VALUE : 4);
 
             boolean endgame    = turno >= 30;
             boolean preEndgame = turno >= 20 && turno < 30;
