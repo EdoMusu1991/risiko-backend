@@ -10,6 +10,10 @@
       <change beforePath="$PROJECT_DIR$/src/main/java/com/risiko/model/GiocatoreSimulato.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/risiko/model/GiocatoreSimulato.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/java/com/risiko/service/AIPlayerService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/AIPlayerService.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/java/com/risiko/service/SimulazioneService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/risiko/service/SimulazioneService.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/resources/static/171.c49db41356f885e6.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/resources/static/common.974560c62d1848a3.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/resources/static/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/resources/static/index.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/resources/static/runtime.be9ffcd066b9852a.js" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/target/classes/com/risiko/service/AIPlayerService$AttaccoCandidate.class" beforeDir="false" afterPath="$PROJECT_DIR$/target/classes/com/risiko/service/AIPlayerService$AttaccoCandidate.class" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/target/classes/com/risiko/service/AIPlayerService.class" beforeDir="false" afterPath="$PROJECT_DIR$/target/classes/com/risiko/service/AIPlayerService.class" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/target/classes/static/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/target/classes/static/index.html" afterDir="false" />
